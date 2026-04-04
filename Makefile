@@ -50,6 +50,11 @@ lint:
 tidy:
 	go mod tidy
 
+# Sync web frontend files to pkg/web/static for go:embed
+sync-static:
+	@mkdir -p pkg/web/static
+	cp web/index.html web/style.css web/app.js pkg/web/static/
+
 # Clean build artifacts
 clean:
 	rm -rf bin/ coverage.out coverage.html

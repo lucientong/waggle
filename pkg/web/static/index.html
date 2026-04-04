@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Waggle — DAG Visualization</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <span class="logo">🐝 Waggle</span>
+      <span class="subtitle">Agent Orchestration Engine</span>
+      <div class="status-bar">
+        <span id="connection-status" class="status-dot disconnected"></span>
+        <span id="connection-label">Connecting...</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- DAG visualization canvas -->
+    <section class="dag-panel">
+      <div class="panel-header">
+        <h2>Workflow DAG</h2>
+        <div class="controls">
+          <button id="btn-refresh" title="Refresh DAG">↺ Refresh</button>
+          <button id="btn-fit" title="Fit to screen">⊡ Fit</button>
+        </div>
+      </div>
+      <div id="dag-container">
+        <svg id="dag-svg"></svg>
+      </div>
+    </section>
+
+    <!-- Side panel: agent detail + metrics -->
+    <aside class="side-panel">
+      <div class="panel-header">
+        <h2>Details</h2>
+      </div>
+
+      <div id="agent-detail" class="detail-card hidden">
+        <h3 id="detail-name">Agent Name</h3>
+        <table class="detail-table">
+          <tr><td>Status</td><td id="detail-status">—</td></tr>
+          <tr><td>Runs</td><td id="detail-runs">—</td></tr>
+          <tr><td>Avg Duration</td><td id="detail-avg-dur">—</td></tr>
+          <tr><td>Error Rate</td><td id="detail-error-rate">—</td></tr>
+          <tr><td>Input Size</td><td id="detail-input-size">—</td></tr>
+          <tr><td>Output Size</td><td id="detail-output-size">—</td></tr>
+        </table>
+      </div>
+
+      <div id="no-selection" class="hint-text">
+        Click a node to see details.
+      </div>
+
+      <!-- Event log -->
+      <div class="panel-header" style="margin-top: 1rem">
+        <h2>Event Log</h2>
+        <button id="btn-clear-log" title="Clear log">✕ Clear</button>
+      </div>
+      <div id="event-log"></div>
+    </aside>
+  </main>
+
+  <!-- D3.js v7 (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

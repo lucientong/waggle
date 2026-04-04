@@ -43,7 +43,6 @@ Thumbs.db
 /web/dist/
 /pkg/web/dist/
 !/pkg/web/dist/.gitkeep
-/pkg/web/static/
 
 # Logs
 *.log
