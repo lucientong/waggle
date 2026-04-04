@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync/atomic"
 )
 
 // RoutingStrategy determines how the router selects a provider.
@@ -25,7 +26,7 @@ const (
 type routerProvider struct {
 	providers  []Provider
 	strategy   RoutingStrategy
-	roundRobin int // for StrategyRoundRobin
+	roundRobin atomic.Int64 // for StrategyRoundRobin, safe for concurrent access
 }
 
 // RouterOption configures the LLM router.
@@ -132,9 +133,8 @@ func (r *routerProvider) chatFailover(ctx context.Context, messages []Message) (
 
 // chatRoundRobin selects the next provider in rotation.
 func (r *routerProvider) chatRoundRobin(ctx context.Context, messages []Message) (string, error) {
-	idx := r.roundRobin % len(r.providers)
-	r.roundRobin++
-	return r.providers[idx].Chat(ctx, messages)
+	idx := r.roundRobin.Add(1) - 1 // atomic increment, get previous value
+	return r.providers[int(idx)%len(r.providers)].Chat(ctx, messages)
 }
 
 // chatBestBy sorts providers by a comparison function and uses the best one,

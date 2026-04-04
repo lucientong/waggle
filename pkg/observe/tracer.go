@@ -2,6 +2,8 @@ package observe
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"sync"
 	"time"
 )
@@ -167,8 +169,14 @@ func (h *spanHandle) EndWithError(err error) {
 	}
 }
 
-// generateID generates a simple unique identifier for spans.
-// In production, a crypto-random ID should be used.
+// generateID generates a cryptographically random unique identifier for spans.
+// Returns a 32-character hex string (128-bit), compatible with OpenTelemetry trace/span ID format.
 func generateID() string {
-	return time.Now().Format("20060102150405.000000000")
+	b := make([]byte, 16)
+	_, err := rand.Read(b)
+	if err != nil {
+		// Extremely unlikely; fall back to time-based ID.
+		return time.Now().Format("20060102150405.000000000")
+	}
+	return hex.EncodeToString(b)
 }

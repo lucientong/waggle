@@ -11,8 +11,8 @@ import (
 
 // sseClient represents a single connected SSE subscriber.
 type sseClient struct {
-	ch     chan string
-	done   <-chan struct{} // closed when the client disconnects
+	ch   chan string
+	done <-chan struct{} // closed when the client disconnects
 }
 
 // sseHub manages all connected SSE clients and broadcasts events to them.

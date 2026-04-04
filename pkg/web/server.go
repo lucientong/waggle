@@ -79,9 +79,9 @@ func NewServer(cfg ServerConfig, w *waggle.Waggle, m *observe.Metrics) *Server {
 	})))
 
 	// API endpoints.
-	mux.HandleFunc("GET /api/dag",     s.handleDAG)
+	mux.HandleFunc("GET /api/dag", s.handleDAG)
 	mux.HandleFunc("GET /api/metrics", s.handleMetrics)
-	mux.HandleFunc("GET /api/events",  s.handleSSE)
+	mux.HandleFunc("GET /api/events", s.handleSSE)
 
 	// Health check.
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {

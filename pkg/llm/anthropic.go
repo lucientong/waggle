@@ -12,10 +12,10 @@ import (
 )
 
 const (
-	defaultAnthropicBaseURL    = "https://api.anthropic.com/v1"
-	defaultAnthropicModel      = "claude-3-5-sonnet-20241022"
-	anthropicAPIVersion        = "2023-06-01"
-	defaultAnthropicMaxTokens  = 8096
+	defaultAnthropicBaseURL   = "https://api.anthropic.com/v1"
+	defaultAnthropicModel     = "claude-3-5-sonnet-20241022"
+	anthropicAPIVersion       = "2023-06-01"
+	defaultAnthropicMaxTokens = 8096
 )
 
 // AnthropicOption is a functional option for configuring the Anthropic provider.
@@ -75,23 +75,23 @@ func NewAnthropic(apiKey string, opts ...AnthropicOption) Provider {
 // Info returns metadata about this Anthropic provider instance.
 func (p *anthropicProvider) Info() ProviderInfo {
 	return ProviderInfo{
-		Name:             "anthropic",
-		Model:            p.model,
-		CostPer1KTokens:  0.003, // approximate for claude-3-5-sonnet
-		AvgLatencyMs:     600,
-		MaxContextTokens: 200000,
+		Name:              "anthropic",
+		Model:             p.model,
+		CostPer1KTokens:   0.003, // approximate for claude-3-5-sonnet
+		AvgLatencyMs:      600,
+		MaxContextTokens:  200000,
 		SupportsStreaming: true,
-		Tags:             []string{"powerful", "long-context"},
+		Tags:              []string{"powerful", "long-context"},
 	}
 }
 
 // anthropicRequest is the request body for the Anthropic Messages API.
 type anthropicRequest struct {
-	Model     string              `json:"model"`
-	MaxTokens int                 `json:"max_tokens"`
-	System    string              `json:"system,omitempty"`
-	Messages  []anthropicMessage  `json:"messages"`
-	Stream    bool                `json:"stream,omitempty"`
+	Model     string             `json:"model"`
+	MaxTokens int                `json:"max_tokens"`
+	System    string             `json:"system,omitempty"`
+	Messages  []anthropicMessage `json:"messages"`
+	Stream    bool               `json:"stream,omitempty"`
 }
 
 type anthropicMessage struct {

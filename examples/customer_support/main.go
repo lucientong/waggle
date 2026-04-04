@@ -52,16 +52,22 @@ func main() {
 	classify := agent.Func[Ticket, Ticket]("classify", func(_ context.Context, t Ticket) (Ticket, error) {
 		slog.Info("classifying ticket", "id", t.ID, "subject", t.Subject)
 		body := strings.ToLower(t.Body)
-		billingKeywords   := []string{"bill", "invoice", "charge", "payment", "refund"}
+		billingKeywords := []string{"bill", "invoice", "charge", "payment", "refund"}
 		technicalKeywords := []string{"error", "crash", "bug", "slow", "timeout"}
 
-		isBilling   := false
+		isBilling := false
 		isTechnical := false
 		for _, kw := range billingKeywords {
-			if strings.Contains(body, kw) { isBilling = true; break }
+			if strings.Contains(body, kw) {
+				isBilling = true
+				break
+			}
 		}
 		for _, kw := range technicalKeywords {
-			if strings.Contains(body, kw) { isTechnical = true; break }
+			if strings.Contains(body, kw) {
+				isTechnical = true
+				break
+			}
 		}
 
 		switch {

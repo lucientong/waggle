@@ -81,9 +81,9 @@ func (a *toolAgent) Name() string { return a.name }
 // Run executes the tool-calling ReAct loop.
 //
 // The loop:
-//   1. Sends messages + tool definitions to the LLM.
-//   2. If the LLM requests tool calls, executes them and appends results to the conversation.
-//   3. Repeats until the LLM provides a FinalAnswer or max iterations is reached.
+//  1. Sends messages + tool definitions to the LLM.
+//  2. If the LLM requests tool calls, executes them and appends results to the conversation.
+//  3. Repeats until the LLM provides a FinalAnswer or max iterations is reached.
 func (a *toolAgent) Run(ctx context.Context, input string) (ToolAgentResult, error) {
 	toolsJSON, err := json.Marshal(a.toolDefs)
 	if err != nil {

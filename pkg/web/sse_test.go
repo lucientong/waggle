@@ -147,7 +147,7 @@ func TestSSE_Headers(t *testing.T) {
 
 	expectedHeaders := map[string]string{
 		"Content-Type":                "text/event-stream",
-		"Cache-Control":              "no-cache",
+		"Cache-Control":               "no-cache",
 		"Access-Control-Allow-Origin": "*",
 	}
 	for key, want := range expectedHeaders {

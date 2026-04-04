@@ -162,6 +162,124 @@ refined := waggle.Loop(improveAgent, func(result string) bool {
 })
 ```
 
+### LLM 集成
+
+Waggle 内置了 LLM Provider 和智能路由器，支持多模型编排：
+
+```go
+import "github.com/lucientong/waggle/pkg/llm"
+
+// OpenAI
+openai := llm.NewOpenAI("sk-...",
+    llm.WithOpenAIModel("gpt-4o"),
+)
+
+// Anthropic Claude
+claude := llm.NewAnthropic("sk-ant-...",
+    llm.WithAnthropicModel("claude-3-5-sonnet-20241022"),
+)
+
+// Ollama（本地模型）
+local := llm.NewOllama(
+    llm.WithOllamaModel("llama3"),
+)
+```
+
+#### 兼容 OpenAI 的第三方 Provider
+
+许多 LLM 提供商都兼容 OpenAI API 格式，只需修改 `baseURL` 即可接入：
+
+```go
+// Google Gemini（OpenAI 兼容端点）
+gemini := llm.NewOpenAI("YOUR_GEMINI_API_KEY",
+    llm.WithOpenAIBaseURL("https://generativelanguage.googleapis.com/v1beta/openai"),
+    llm.WithOpenAIModel("gemini-2.0-flash"),
+)
+
+// Azure OpenAI
+azure := llm.NewOpenAI("YOUR_AZURE_API_KEY",
+    llm.WithOpenAIBaseURL("https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT"),
+    llm.WithOpenAIModel("gpt-4o"),
+)
+
+// DeepSeek（深度求索）
+deepseek := llm.NewOpenAI("YOUR_DEEPSEEK_API_KEY",
+    llm.WithOpenAIBaseURL("https://api.deepseek.com/v1"),
+    llm.WithOpenAIModel("deepseek-chat"),
+)
+
+// Groq
+groq := llm.NewOpenAI("YOUR_GROQ_API_KEY",
+    llm.WithOpenAIBaseURL("https://api.groq.com/openai/v1"),
+    llm.WithOpenAIModel("llama-3.3-70b-versatile"),
+)
+
+// Mistral
+mistral := llm.NewOpenAI("YOUR_MISTRAL_API_KEY",
+    llm.WithOpenAIBaseURL("https://api.mistral.ai/v1"),
+    llm.WithOpenAIModel("mistral-large-latest"),
+)
+```
+
+#### LLM Agent
+
+将任意 LLM Provider 转为类型安全的 Agent：
+
+```go
+summarizer := llm.NewLLMAgent[string]("summarizer", openai,
+    func(ctx context.Context, text string) ([]llm.Message, error) {
+        return []llm.Message{
+            {Role: llm.RoleSystem, Content: "You are a concise summarizer."},
+            {Role: llm.RoleUser, Content: "Summarize: " + text},
+        }, nil
+    },
+)
+
+// 或使用 SimplePrompt 便捷构建器：
+translator := llm.NewLLMAgent("translator", claude,
+    llm.SimplePrompt[string]("Translate to English.", func(s string) string { return s }),
+)
+
+result, _ := summarizer.Run(ctx, "一段很长的文章...")
+```
+
+#### Tool Agent（函数调用）
+
+构建 ReAct 循环的 Agent，支持调用外部工具：
+
+```go
+agent := llm.NewToolAgent("assistant", openai,
+    "You are a helpful assistant.",
+    []llm.ToolDefinition{
+        {
+            Name:        "search",
+            Description: "Search the web for information",
+            Parameters:  `{"type":"object","properties":{"query":{"type":"string"}}}`,
+        },
+    },
+    func(ctx context.Context, name string, args string) (string, error) {
+        // 执行工具并返回结果
+        return searchWeb(args), nil
+    },
+)
+
+result, _ := agent.Run(ctx, "东京今天天气怎么样？")
+```
+
+#### 智能路由
+
+跨多个 Provider 路由请求，内置 4 种策略：
+
+```go
+router := llm.NewRouter(
+    llm.StrategyLowestCost,  // 或：StrategyLowestLatency、StrategyRoundRobin、StrategyFailover
+    openai, claude, local,
+)
+
+// 像普通 Provider 一样使用路由器——自动选择最优后端
+result, _ := router.Chat(ctx, messages)
+```
+
 ## 项目结构
 
 ```

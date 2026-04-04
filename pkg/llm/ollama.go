@@ -72,13 +72,13 @@ func NewOllama(opts ...OllamaOption) Provider {
 // Info returns metadata about this Ollama provider instance.
 func (p *ollamaProvider) Info() ProviderInfo {
 	return ProviderInfo{
-		Name:             "ollama",
-		Model:            p.model,
-		CostPer1KTokens:  0, // local — no cost
-		AvgLatencyMs:     2000,
-		MaxContextTokens: 8192,
+		Name:              "ollama",
+		Model:             p.model,
+		CostPer1KTokens:   0, // local — no cost
+		AvgLatencyMs:      2000,
+		MaxContextTokens:  8192,
 		SupportsStreaming: true,
-		Tags:             []string{"local", "free", "private"},
+		Tags:              []string{"local", "free", "private"},
 	}
 }
 

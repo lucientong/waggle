@@ -21,10 +21,10 @@ type dagNodeJSON struct {
 }
 
 type dagEdgeJSON struct {
-	From       string `json:"from"`
-	To         string `json:"to"`
-	LatencyMs  int64  `json:"latency_ms,omitempty"`
-	DataSize   int    `json:"data_size,omitempty"`
+	From      string `json:"from"`
+	To        string `json:"to"`
+	LatencyMs int64  `json:"latency_ms,omitempty"`
+	DataSize  int    `json:"data_size,omitempty"`
 }
 
 // metricsResponse is the JSON response for GET /api/metrics.
@@ -33,16 +33,16 @@ type metricsResponse struct {
 }
 
 type agentMetricsJSON struct {
-	AgentName        string        `json:"agent_name"`
-	TotalRuns        int64         `json:"total_runs"`
-	SuccessRuns      int64         `json:"success_runs"`
-	ErrorRuns        int64         `json:"error_runs"`
-	ErrorRate        float64       `json:"error_rate"`
-	AvgDurationMs    int64         `json:"avg_duration_ms"`
-	MinDurationMs    int64         `json:"min_duration_ms"`
-	MaxDurationMs    int64         `json:"max_duration_ms"`
-	TotalInputBytes  int64         `json:"total_input_bytes"`
-	TotalOutputBytes int64         `json:"total_output_bytes"`
+	AgentName        string  `json:"agent_name"`
+	TotalRuns        int64   `json:"total_runs"`
+	SuccessRuns      int64   `json:"success_runs"`
+	ErrorRuns        int64   `json:"error_runs"`
+	ErrorRate        float64 `json:"error_rate"`
+	AvgDurationMs    int64   `json:"avg_duration_ms"`
+	MinDurationMs    int64   `json:"min_duration_ms"`
+	MaxDurationMs    int64   `json:"max_duration_ms"`
+	TotalInputBytes  int64   `json:"total_input_bytes"`
+	TotalOutputBytes int64   `json:"total_output_bytes"`
 }
 
 // handleDAG serves the current DAG structure.
@@ -110,13 +110,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 // eventJSON is the JSON representation of an event sent over SSE.
 type eventJSON struct {
-	Type       string            `json:"type"`
-	AgentName  string            `json:"agent_name,omitempty"`
-	WorkflowID string            `json:"workflow_id,omitempty"`
-	Timestamp  time.Time         `json:"timestamp"`
-	DurationMs int64             `json:"duration_ms,omitempty"`
-	Error      string            `json:"error,omitempty"`
-	InputSize  int               `json:"input_size,omitempty"`
-	OutputSize int               `json:"output_size,omitempty"`
-	Metadata   map[string]any    `json:"metadata,omitempty"`
+	Type       string         `json:"type"`
+	AgentName  string         `json:"agent_name,omitempty"`
+	WorkflowID string         `json:"workflow_id,omitempty"`
+	Timestamp  time.Time      `json:"timestamp"`
+	DurationMs int64          `json:"duration_ms,omitempty"`
+	Error      string         `json:"error,omitempty"`
+	InputSize  int            `json:"input_size,omitempty"`
+	OutputSize int            `json:"output_size,omitempty"`
+	Metadata   map[string]any `json:"metadata,omitempty"`
 }

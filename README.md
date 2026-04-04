@@ -34,6 +34,7 @@ package main
 import (
     "context"
     "fmt"
+    "strings"
 
     "github.com/lucientong/waggle/pkg/agent"
 )
@@ -159,6 +160,124 @@ routed := waggle.Router(classifyFn, map[string]Agent{
 refined := waggle.Loop(improveAgent, func(result string) bool {
     return qualityScore(result) >= 0.9
 })
+```
+
+### LLM Integration
+
+Waggle provides built-in LLM providers and a smart router for multi-model orchestration:
+
+```go
+import "github.com/lucientong/waggle/pkg/llm"
+
+// OpenAI
+openai := llm.NewOpenAI("sk-...",
+    llm.WithOpenAIModel("gpt-4o"),
+)
+
+// Anthropic Claude
+claude := llm.NewAnthropic("sk-ant-...",
+    llm.WithAnthropicModel("claude-3-5-sonnet-20241022"),
+)
+
+// Ollama (local models)
+local := llm.NewOllama(
+    llm.WithOllamaModel("llama3"),
+)
+```
+
+#### OpenAI-Compatible Providers
+
+Since many providers offer OpenAI-compatible APIs, you can connect to them by simply overriding the `baseURL`:
+
+```go
+// Google Gemini (OpenAI-compatible endpoint)
+gemini := llm.NewOpenAI("YOUR_GEMINI_API_KEY",
+    llm.WithOpenAIBaseURL("https://generativelanguage.googleapis.com/v1beta/openai"),
+    llm.WithOpenAIModel("gemini-2.0-flash"),
+)
+
+// Azure OpenAI
+azure := llm.NewOpenAI("YOUR_AZURE_API_KEY",
+    llm.WithOpenAIBaseURL("https://YOUR_RESOURCE.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT"),
+    llm.WithOpenAIModel("gpt-4o"),
+)
+
+// DeepSeek
+deepseek := llm.NewOpenAI("YOUR_DEEPSEEK_API_KEY",
+    llm.WithOpenAIBaseURL("https://api.deepseek.com/v1"),
+    llm.WithOpenAIModel("deepseek-chat"),
+)
+
+// Groq
+groq := llm.NewOpenAI("YOUR_GROQ_API_KEY",
+    llm.WithOpenAIBaseURL("https://api.groq.com/openai/v1"),
+    llm.WithOpenAIModel("llama-3.3-70b-versatile"),
+)
+
+// Mistral
+mistral := llm.NewOpenAI("YOUR_MISTRAL_API_KEY",
+    llm.WithOpenAIBaseURL("https://api.mistral.ai/v1"),
+    llm.WithOpenAIModel("mistral-large-latest"),
+)
+```
+
+#### LLM Agent
+
+Turn any LLM provider into a type-safe Agent:
+
+```go
+summarizer := llm.NewLLMAgent[string]("summarizer", openai,
+    func(ctx context.Context, text string) ([]llm.Message, error) {
+        return []llm.Message{
+            {Role: llm.RoleSystem, Content: "You are a concise summarizer."},
+            {Role: llm.RoleUser, Content: "Summarize: " + text},
+        }, nil
+    },
+)
+
+// Or use the SimplePrompt helper:
+translator := llm.NewLLMAgent("translator", claude,
+    llm.SimplePrompt[string]("Translate to English.", func(s string) string { return s }),
+)
+
+result, _ := summarizer.Run(ctx, "Long article text...")
+```
+
+#### Tool Agent (Function Calling)
+
+Build ReAct-loop agents that can invoke tools:
+
+```go
+agent := llm.NewToolAgent("assistant", openai,
+    "You are a helpful assistant.",
+    []llm.ToolDefinition{
+        {
+            Name:        "search",
+            Description: "Search the web for information",
+            Parameters:  `{"type":"object","properties":{"query":{"type":"string"}}}`,
+        },
+    },
+    func(ctx context.Context, name string, args string) (string, error) {
+        // Execute tool and return result
+        return searchWeb(args), nil
+    },
+)
+
+result, _ := agent.Run(ctx, "What is the weather in Tokyo?")
+```
+
+#### Smart Router
+
+Route requests across multiple providers with built-in strategies:
+
+```go
+router := llm.NewRouter(
+    llm.StrategyLowestCost,  // or: StrategyLowestLatency, StrategyRoundRobin, StrategyFailover
+    openai, claude, local,
+)
+
+// Use the router as a regular provider — it selects the best backend automatically
+result, _ := router.Chat(ctx, messages)
 ```
 
 ## Project Structure

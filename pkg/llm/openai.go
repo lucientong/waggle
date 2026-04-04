@@ -72,21 +72,21 @@ func NewOpenAI(apiKey string, opts ...OpenAIOption) Provider {
 // Info returns metadata about this OpenAI provider instance.
 func (p *openAIProvider) Info() ProviderInfo {
 	return ProviderInfo{
-		Name:             "openai",
-		Model:            p.model,
-		CostPer1KTokens:  0.005, // approximate for gpt-4o
-		AvgLatencyMs:     800,
-		MaxContextTokens: 128000,
+		Name:              "openai",
+		Model:             p.model,
+		CostPer1KTokens:   0.005, // approximate for gpt-4o
+		AvgLatencyMs:      800,
+		MaxContextTokens:  128000,
 		SupportsStreaming: true,
-		Tags:             []string{"powerful", "reliable"},
+		Tags:              []string{"powerful", "reliable"},
 	}
 }
 
 // openAIChatRequest is the request body for the OpenAI Chat Completions API.
 type openAIChatRequest struct {
-	Model    string             `json:"model"`
-	Messages []openAIMessage    `json:"messages"`
-	Stream   bool               `json:"stream,omitempty"`
+	Model    string          `json:"model"`
+	Messages []openAIMessage `json:"messages"`
+	Stream   bool            `json:"stream,omitempty"`
 }
 
 type openAIMessage struct {

@@ -32,7 +32,7 @@ func newMockOllamaServer(t *testing.T, chunks []map[string]any) *httptest.Server
 
 		for _, chunk := range chunks {
 			data, _ := json.Marshal(chunk)
-			w.Write(data)    //nolint
+			w.Write(data)         //nolint
 			w.Write([]byte("\n")) //nolint
 			flusher.Flush()
 		}
