@@ -5,6 +5,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/lucientong/waggle.svg)](https://pkg.go.dev/github.com/lucientong/waggle)
 [![CI](https://github.com/lucientong/waggle/actions/workflows/ci.yml/badge.svg)](https://github.com/lucientong/waggle/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/lucientong/waggle)](https://goreportcard.com/report/github.com/lucientong/waggle)
+[![codecov](https://codecov.io/gh/lucientong/waggle/branch/master/graph/badge.svg)](https://codecov.io/gh/lucientong/waggle)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 **Waggle** is named after the *waggle dance* — the way honeybees communicate the direction and distance of food sources to their hive. In Waggle, every Agent is a bee, goroutines are its wings, and channels are the colony's communication dance.

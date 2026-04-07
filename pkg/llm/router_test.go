@@ -487,13 +487,50 @@ func TestAnthropic_Info(t *testing.T) {
 	}
 }
 
-func TestAnthropic_Chat_WithSystemMessage(t *testing.T) {
+func TestAnthropic_MaxTokensOption(t *testing.T) {
+	p := llm.NewAnthropic("key", llm.WithAnthropicMaxTokens(2048))
+	info := p.Info()
+	if info.Name != "anthropic" {
+		t.Errorf("Info().Name = %q, want %q", info.Name, "anthropic")
+	}
+}
+
+func TestAnthropic_Chat_Success(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify the request body contains system field.
+		if r.Header.Get("x-api-key") != "test-key" {
+			t.Errorf("x-api-key = %q, want %q", r.Header.Get("x-api-key"), "test-key")
+		}
+		if r.Header.Get("anthropic-version") == "" {
+			t.Error("missing anthropic-version header")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"content":[{"type":"text","text":"Hello from Claude!"}]}`)) //nolint
+	}))
+	defer srv.Close()
+
+	p := llm.NewAnthropic("test-key",
+		llm.WithAnthropicBaseURL(srv.URL),
+		llm.WithAnthropicHTTPClient(srv.Client()),
+	)
+
+	result, err := p.Chat(context.Background(), []llm.Message{
+		{Role: llm.RoleUser, Content: "Hello"},
+	})
+	if err != nil {
+		t.Fatalf("Chat() unexpected error: %v", err)
+	}
+	if result != "Hello from Claude!" {
+		t.Errorf("Chat() = %q, want %q", result, "Hello from Claude!")
+	}
+}
+
+func TestAnthropic_Chat_WithSystemMessage(t *testing.T) {
+	var receivedSystem string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body) //nolint
-		if body["system"] == nil || body["system"] == "" {
-			// Still return a valid response.
+		if s, ok := body["system"].(string); ok {
+			receivedSystem = s
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"content":[{"type":"text","text":"response with system"}]}`)) //nolint
@@ -501,18 +538,22 @@ func TestAnthropic_Chat_WithSystemMessage(t *testing.T) {
 	defer srv.Close()
 
 	p := llm.NewAnthropic("key",
+		llm.WithAnthropicBaseURL(srv.URL),
 		llm.WithAnthropicHTTPClient(srv.Client()),
 	)
-	// The base URL in the provider is api.anthropic.com, but we need the mock.
-	// Since we can't override baseURL directly, we test extractSystem indirectly.
-	_ = p
-}
 
-func TestAnthropic_MaxTokensOption(t *testing.T) {
-	p := llm.NewAnthropic("key", llm.WithAnthropicMaxTokens(2048))
-	info := p.Info()
-	if info.Name != "anthropic" {
-		t.Errorf("Info().Name = %q, want %q", info.Name, "anthropic")
+	result, err := p.Chat(context.Background(), []llm.Message{
+		{Role: llm.RoleSystem, Content: "You are a helpful assistant."},
+		{Role: llm.RoleUser, Content: "Hello"},
+	})
+	if err != nil {
+		t.Fatalf("Chat() unexpected error: %v", err)
+	}
+	if result != "response with system" {
+		t.Errorf("Chat() = %q, want %q", result, "response with system")
+	}
+	if receivedSystem != "You are a helpful assistant." {
+		t.Errorf("system = %q, want %q", receivedSystem, "You are a helpful assistant.")
 	}
 }
 
@@ -523,10 +564,125 @@ func TestAnthropic_Chat_APIError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Create provider with mock server — need to test the error path.
-	// The Anthropic provider appends /messages to baseURL.
 	p := llm.NewAnthropic("bad-key",
+		llm.WithAnthropicBaseURL(srv.URL),
 		llm.WithAnthropicHTTPClient(srv.Client()),
 	)
-	_ = p // Testing compiles; full integration tested via mock server.
+
+	_, err := p.Chat(context.Background(), []llm.Message{
+		{Role: llm.RoleUser, Content: "hi"},
+	})
+	if err == nil {
+		t.Fatal("Chat() expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid key") {
+		t.Errorf("error = %v, want to contain 'invalid key'", err)
+	}
+}
+
+func TestAnthropic_Chat_EmptyContent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"content":[]}`)) //nolint
+	}))
+	defer srv.Close()
+
+	p := llm.NewAnthropic("key",
+		llm.WithAnthropicBaseURL(srv.URL),
+		llm.WithAnthropicHTTPClient(srv.Client()),
+	)
+
+	result, err := p.Chat(context.Background(), []llm.Message{
+		{Role: llm.RoleUser, Content: "hi"},
+	})
+	if err != nil {
+		t.Fatalf("Chat() unexpected error: %v", err)
+	}
+	if result != "" {
+		t.Errorf("Chat() = %q, want empty string for no content blocks", result)
+	}
+}
+
+func TestAnthropic_ChatStream_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		events := []string{
+			`data: {"type":"content_block_start","index":0}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello "}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"world!"}}`,
+			`data: {"type":"message_stop"}`,
+		}
+		for _, e := range events {
+			fmt.Fprintln(w, e)
+			flusher.Flush()
+		}
+	}))
+	defer srv.Close()
+
+	p := llm.NewAnthropic("key",
+		llm.WithAnthropicBaseURL(srv.URL),
+		llm.WithAnthropicHTTPClient(srv.Client()),
+	)
+
+	ch, err := p.ChatStream(context.Background(), []llm.Message{
+		{Role: llm.RoleUser, Content: "Hi"},
+	})
+	if err != nil {
+		t.Fatalf("ChatStream() unexpected error: %v", err)
+	}
+
+	var tokens []string
+	for tok := range ch {
+		tokens = append(tokens, tok)
+	}
+	joined := strings.Join(tokens, "")
+	if joined != "Hello world!" {
+		t.Errorf("stream result = %q, want %q", joined, "Hello world!")
+	}
+}
+
+func TestAnthropic_ChatStream_ContextCancelled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	p := llm.NewAnthropic("key",
+		llm.WithAnthropicBaseURL(srv.URL),
+		llm.WithAnthropicHTTPClient(srv.Client()),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := p.ChatStream(ctx, []llm.Message{
+		{Role: llm.RoleUser, Content: "hi"},
+	})
+	if err == nil {
+		t.Fatal("ChatStream() expected error with cancelled context, got nil")
+	}
+}
+
+func TestAnthropic_Chat_MultipleTextBlocks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"content":[{"type":"text","text":"part1"},{"type":"image","text":"skip"},{"type":"text","text":"part2"}]}`)) //nolint
+	}))
+	defer srv.Close()
+
+	p := llm.NewAnthropic("key",
+		llm.WithAnthropicBaseURL(srv.URL),
+		llm.WithAnthropicHTTPClient(srv.Client()),
+	)
+
+	result, err := p.Chat(context.Background(), []llm.Message{
+		{Role: llm.RoleUser, Content: "hi"},
+	})
+	if err != nil {
+		t.Fatalf("Chat() unexpected error: %v", err)
+	}
+	if result != "part1part2" {
+		t.Errorf("Chat() = %q, want %q", result, "part1part2")
+	}
 }

@@ -37,23 +37,23 @@ import (
 type TimerEntry struct {
 	UserID    string
 	TriggerAt time.Time
-	Reason    string    // e.g., "follow_up", "reminder", "check_in"
-	Context   string    // recent conversation context
+	Reason    string // e.g., "follow_up", "reminder", "check_in"
+	Context   string // recent conversation context
 }
 
 // JudgeResult is the output of the L1 cheap judge.
 type JudgeResult struct {
-	Entry     TimerEntry
-	ShouldAct bool
-	Reason    string
+	Entry      TimerEntry
+	ShouldAct  bool
+	Reason     string
 	Confidence float64 // 0.0 - 1.0
 }
 
 // ProactiveMessage is the final output of the pipeline.
 type ProactiveMessage struct {
-	UserID  string
-	Message string
-	Channel string // "im", "email", "push"
+	UserID   string
+	Message  string
+	Channel  string // "im", "email", "push"
 	Priority string // "low", "medium", "high"
 }
 

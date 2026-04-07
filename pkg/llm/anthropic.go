@@ -35,6 +35,13 @@ func WithAnthropicMaxTokens(n int) AnthropicOption {
 	}
 }
 
+// WithAnthropicBaseURL overrides the API base URL (useful for testing with a mock server).
+func WithAnthropicBaseURL(url string) AnthropicOption {
+	return func(p *anthropicProvider) {
+		p.baseURL = strings.TrimRight(url, "/")
+	}
+}
+
 // WithAnthropicHTTPClient replaces the default HTTP client (useful for testing).
 func WithAnthropicHTTPClient(client *http.Client) AnthropicOption {
 	return func(p *anthropicProvider) {

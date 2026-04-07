@@ -5,6 +5,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/lucientong/waggle.svg)](https://pkg.go.dev/github.com/lucientong/waggle)
 [![CI](https://github.com/lucientong/waggle/actions/workflows/ci.yml/badge.svg)](https://github.com/lucientong/waggle/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/lucientong/waggle)](https://goreportcard.com/report/github.com/lucientong/waggle)
+[![codecov](https://codecov.io/gh/lucientong/waggle/branch/master/graph/badge.svg)](https://codecov.io/gh/lucientong/waggle)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 **Waggle** 的名字来源于蜜蜂的「摇摆舞」（Waggle Dance）——蜜蜂通过摇摆舞告诉同伴花蜜的方向和距离。在 Waggle 中，每个 Agent 是一只蜜蜂，goroutine 是它的翅膀，channel 是蜂群的通信舞步。
