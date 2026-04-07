@@ -50,7 +50,7 @@ func TestAPIDAG_Empty(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if _, ok := body["nodes"]; !ok {
 		t.Error("response missing 'nodes' field")
@@ -69,7 +69,7 @@ func TestAPIMetrics_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /api/metrics error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
@@ -96,7 +96,7 @@ func TestAPIMetrics_WithData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /api/metrics error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var body map[string]any
 	json.NewDecoder(resp.Body).Decode(&body) //nolint
@@ -122,7 +122,7 @@ func TestContentTypeJSON(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET %s error: %v", path, err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		ct := resp.Header.Get("Content-Type")
 		if !strings.HasPrefix(ct, "application/json") {
 			t.Errorf("GET %s Content-Type = %q, want application/json", path, ct)

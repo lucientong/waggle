@@ -157,6 +157,7 @@ func TestTracer_SpanLifecycle(t *testing.T) {
 	}
 
 	span.SetAttribute("response_size", 1024)
+	time.Sleep(time.Millisecond) // ensure non-zero duration even on low-resolution timers (Windows)
 	span.End()
 
 	spans := tracer.Spans()
