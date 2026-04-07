@@ -98,7 +98,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Send an initial "connected" ping.
-	fmt.Fprintf(w, "data: {\"type\":\"connected\"}\n\n")
+	_, _ = fmt.Fprintf(w, "data: {\"type\":\"connected\"}\n\n")
 	flusher.Flush()
 
 	for {
@@ -109,7 +109,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			fmt.Fprint(w, msg)
+			_, _ = fmt.Fprint(w, msg)
 			flusher.Flush()
 		}
 	}

@@ -35,8 +35,12 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
+      - name: Run tests (Windows)
+        if: matrix.os == 'windows-latest'
+        run: go test -v -count=1 ./...
+
       - name: Run tests with race detector
-        if: matrix.os != 'ubuntu-latest'
+        if: matrix.os == 'macos-latest'
         run: go test -v -race -count=1 ./...
 
       - name: Run tests with race detector and coverage

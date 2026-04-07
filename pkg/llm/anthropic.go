@@ -149,7 +149,7 @@ func (p *anthropicProvider) Chat(ctx context.Context, messages []Message) (strin
 	if err != nil {
 		return "", fmt.Errorf("anthropic: http request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -208,7 +208,7 @@ func (p *anthropicProvider) ChatStream(ctx context.Context, messages []Message) 
 	ch := make(chan string, 64)
 	go func() {
 		defer close(ch)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {

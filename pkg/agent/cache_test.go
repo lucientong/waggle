@@ -73,8 +73,8 @@ func TestWithCache_DifferentKeys(t *testing.T) {
 
 	cached.Run(context.Background(), "foo") //nolint
 	cached.Run(context.Background(), "bar") //nolint
-	cached.Run(context.Background(), "foo") // cache hit
-	cached.Run(context.Background(), "bar") // cache hit
+	cached.Run(context.Background(), "foo") //nolint:errcheck // cache hit
+	cached.Run(context.Background(), "bar") //nolint:errcheck // cache hit
 
 	if calls.Load() != 2 {
 		t.Errorf("expected 2 underlying calls (foo + bar), got %d", calls.Load())

@@ -154,7 +154,7 @@ func (p *ollamaProvider) ChatStream(ctx context.Context, messages []Message) (<-
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("ollama: unexpected status %d: %s", resp.StatusCode, string(body))
 	}
 

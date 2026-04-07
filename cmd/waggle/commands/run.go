@@ -135,7 +135,7 @@ func Dot(_ context.Context, args []string) error {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("digraph %q {\n", wf.Name))
+	fmt.Fprintf(&sb, "digraph %q {\n", wf.Name)
 	sb.WriteString("  rankdir=LR;\n")
 	sb.WriteString("  node [shape=box, style=filled, fillcolor=\"#1a1d27\", fontcolor=white, fontname=Helvetica];\n")
 	sb.WriteString("  edge [color=\"#4a5568\"];\n\n")
@@ -145,11 +145,11 @@ func Dot(_ context.Context, args []string) error {
 		if a.Type != "" {
 			label += fmt.Sprintf("\\n[%s]", a.Type)
 		}
-		sb.WriteString(fmt.Sprintf("  %q [label=%q];\n", a.Name, label))
+		fmt.Fprintf(&sb, "  %q [label=%q];\n", a.Name, label)
 	}
 	sb.WriteString("\n")
 	for _, edge := range wf.Flow {
-		sb.WriteString(fmt.Sprintf("  %q -> %q;\n", edge.From, edge.To))
+		fmt.Fprintf(&sb, "  %q -> %q;\n", edge.From, edge.To)
 	}
 	sb.WriteString("}\n")
 
