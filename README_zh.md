@@ -2,9 +2,10 @@
 
 > 轻量级 Go AI Agent 编排引擎。
 
-[![Go Version](https://img.shields.io/badge/go-1.26+-blue.svg)](https://golang.org)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Go Reference](https://pkg.go.dev/badge/github.com/lucientong/waggle.svg)](https://pkg.go.dev/github.com/lucientong/waggle)
+[![CI](https://github.com/lucientong/waggle/actions/workflows/ci.yml/badge.svg)](https://github.com/lucientong/waggle/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/lucientong/waggle)](https://goreportcard.com/report/github.com/lucientong/waggle)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 **Waggle** 的名字来源于蜜蜂的「摇摆舞」（Waggle Dance）——蜜蜂通过摇摆舞告诉同伴花蜜的方向和距离。在 Waggle 中，每个 Agent 是一只蜜蜂，goroutine 是它的翅膀，channel 是蜂群的通信舞步。
 
@@ -292,8 +293,17 @@ waggle/
 │   └── web/        # 内嵌 Web 可视化面板
 ├── cmd/waggle/     # CLI：run / serve / validate / dot
 ├── web/            # 前端源码（D3.js DAG 可视化）
-└── examples/       # code_review / research / customer_support
+└── examples/       # code_review / research / customer_support / proactive_agent
 ```
+
+## 示例
+
+| 示例 | 使用模式 | 描述 |
+|------|---------|------|
+| [代码审查](examples/code_review/) | Chain, WithRetry, WithCache | 多阶段代码审查管道 |
+| [智能客服](examples/customer_support/) | Router, Loop, WithRetry | 智能工单路由与响应优化 |
+| [调研助手](examples/research/) | Parallel, Race, Chain | 并发多源信息调研合成 |
+| [主动式 Agent](examples/proactive_agent/) | Router, Chain, WithTimeout | 分层 Timer 驱动的主动消息推送 |
 
 ## 开发阶段
 

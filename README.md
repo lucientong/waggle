@@ -2,9 +2,10 @@
 
 > A lightweight AI Agent orchestration engine for Go.
 
-[![Go Version](https://img.shields.io/badge/go-1.26+-blue.svg)](https://golang.org)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Go Reference](https://pkg.go.dev/badge/github.com/lucientong/waggle.svg)](https://pkg.go.dev/github.com/lucientong/waggle)
+[![CI](https://github.com/lucientong/waggle/actions/workflows/ci.yml/badge.svg)](https://github.com/lucientong/waggle/actions/workflows/ci.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/lucientong/waggle)](https://goreportcard.com/report/github.com/lucientong/waggle)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 **Waggle** is named after the *waggle dance* — the way honeybees communicate the direction and distance of food sources to their hive. In Waggle, every Agent is a bee, goroutines are its wings, and channels are the colony's communication dance.
 
@@ -292,8 +293,17 @@ waggle/
 │   └── web/        # Embedded web visualization panel
 ├── cmd/waggle/     # CLI: run / serve / validate / dot
 ├── web/            # Frontend source (D3.js DAG visualization)
-└── examples/       # code_review / research / customer_support
+└── examples/       # code_review / research / customer_support / proactive_agent
 ```
+
+## Examples
+
+| Example | Patterns Used | Description |
+|---------|--------------|-------------|
+| [Code Review](examples/code_review/) | Chain, WithRetry, WithCache | Multi-stage code review pipeline |
+| [Customer Support](examples/customer_support/) | Router, Loop, WithRetry | Intelligent ticket routing & response refinement |
+| [Research Assistant](examples/research/) | Parallel, Race, Chain | Concurrent multi-source research synthesis |
+| [Proactive Agent](examples/proactive_agent/) | Router, Chain, WithTimeout | Layered timer-driven proactive messaging |
 
 ## Development Phases
 

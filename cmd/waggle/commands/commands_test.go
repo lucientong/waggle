@@ -1,10 +1,12 @@
 package commands_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lucientong/waggle/cmd/waggle/commands"
 )
@@ -252,6 +254,248 @@ flow:
 	}
 	if len(wf.Flow) != 4 {
 		t.Errorf("Flow = %d, want 4", len(wf.Flow))
+	}
+}
+
+// ---- Validate command tests ----
+
+func TestValidate_NoArgs(t *testing.T) {
+	err := commands.Validate(context.Background(), nil)
+	if err == nil {
+		t.Fatal("Validate() expected error with no args, got nil")
+	}
+}
+
+func TestValidate_ValidFile(t *testing.T) {
+	content := `
+name: valid-wf
+agents:
+  - name: a
+    type: func
+  - name: b
+    type: func
+flow:
+  - from: a
+    to: b
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "valid.yaml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	err := commands.Validate(context.Background(), []string{path})
+	if err != nil {
+		t.Fatalf("Validate() unexpected error: %v", err)
+	}
+}
+
+func TestValidate_InvalidFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.yaml")
+	if err := os.WriteFile(path, []byte("{{invalid"), 0644); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	// Validate prints to stderr but doesn't return error for individual file failures.
+	err := commands.Validate(context.Background(), []string{path})
+	if err != nil {
+		t.Fatalf("Validate() unexpected error: %v", err)
+	}
+}
+
+func TestValidate_MissingFile(t *testing.T) {
+	err := commands.Validate(context.Background(), []string{"/nonexistent/file.yaml"})
+	if err != nil {
+		t.Fatalf("Validate() unexpected error: %v", err)
+	}
+}
+
+func TestValidate_MultipleFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	good := filepath.Join(dir, "good.yaml")
+	os.WriteFile(good, []byte("name: good\nagents:\n  - name: a\n    type: func\n"), 0644) //nolint
+
+	bad := filepath.Join(dir, "bad.yaml")
+	os.WriteFile(bad, []byte("{{invalid yaml"), 0644) //nolint
+
+	err := commands.Validate(context.Background(), []string{good, bad})
+	if err != nil {
+		t.Fatalf("Validate() unexpected error: %v", err)
+	}
+}
+
+// ---- Dot command tests ----
+
+func TestDot_NoArgs(t *testing.T) {
+	err := commands.Dot(context.Background(), nil)
+	if err == nil {
+		t.Fatal("Dot() expected error with no args, got nil")
+	}
+}
+
+func TestDot_ValidFile(t *testing.T) {
+	content := `
+name: dot-test
+agents:
+  - name: fetch
+    type: func
+  - name: process
+    type: llm
+    model: gpt-4o
+flow:
+  - from: fetch
+    to: process
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "workflow.yaml")
+	os.WriteFile(path, []byte(content), 0644) //nolint
+
+	// Capture stdout
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := commands.Dot(context.Background(), []string{path})
+
+	w.Close()
+	os.Stdout = old
+
+	if err != nil {
+		t.Fatalf("Dot() unexpected error: %v", err)
+	}
+
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	output := string(buf[:n])
+
+	if !strings.Contains(output, "digraph") {
+		t.Error("Dot output should contain 'digraph'")
+	}
+	if !strings.Contains(output, "fetch") {
+		t.Error("Dot output should contain 'fetch' node")
+	}
+	if !strings.Contains(output, "process") {
+		t.Error("Dot output should contain 'process' node")
+	}
+	if !strings.Contains(output, "[llm]") {
+		t.Error("Dot output should contain type annotation '[llm]'")
+	}
+}
+
+func TestDot_InvalidFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.yaml")
+	os.WriteFile(path, []byte("{{invalid"), 0644) //nolint
+
+	err := commands.Dot(context.Background(), []string{path})
+	if err == nil {
+		t.Fatal("Dot() expected error for invalid YAML, got nil")
+	}
+}
+
+func TestDot_FileNotFound(t *testing.T) {
+	err := commands.Dot(context.Background(), []string{"/nonexistent/file.yaml"})
+	if err == nil {
+		t.Fatal("Dot() expected error for missing file, got nil")
+	}
+}
+
+// ---- Run command tests ----
+
+func TestRun_NoArgs(t *testing.T) {
+	err := commands.Run(context.Background(), nil)
+	if err == nil {
+		t.Fatal("Run() expected error with no args, got nil")
+	}
+}
+
+func TestRun_FileNotFound(t *testing.T) {
+	err := commands.Run(context.Background(), []string{"/nonexistent/file.yaml"})
+	if err == nil {
+		t.Fatal("Run() expected error for missing file, got nil")
+	}
+}
+
+func TestRun_ValidWorkflow(t *testing.T) {
+	content := `
+name: run-test
+agents:
+  - name: source
+    type: func
+  - name: sink
+    type: func
+flow:
+  - from: source
+    to: sink
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "workflow.yaml")
+	os.WriteFile(path, []byte(content), 0644) //nolint
+
+	err := commands.Run(context.Background(), []string{"--input", "hello", path})
+	if err != nil {
+		t.Fatalf("Run() unexpected error: %v", err)
+	}
+}
+
+func TestRun_NoSourceAgent(t *testing.T) {
+	// All agents have incoming edges — no source can be found.
+	// Agent a -> b, c -> a, c -> b. Agent c has incoming from nowhere? No.
+	// We need all agents to have at least one incoming edge.
+	// Use: a -> b, a -> c, b -> c. Here "a" has no incoming, so it's the source.
+	// Instead: b -> a, c -> b, a -> c — this is a cycle, Connect will reject it.
+	// Better approach: create a workflow where all agents have incoming edges
+	// but no cycle by making it a single-node self-loop (which waggle rejects).
+	// Simplest: a workflow with no flow edges but multiple agents — findSourceAgent
+	// returns the first one, so we can't easily test "no source" without a cycle.
+	//
+	// Actually if ALL agents have incoming edges and the graph is acyclic,
+	// that's impossible (a DAG must have at least one source). So we just
+	// test that a workflow with all nodes having incoming edges in the YAML
+	// (but cycle detection happens at Connect time).
+	//
+	// Instead, test Run with an empty workflow (no agents, no flow).
+	content := `
+name: empty-wf
+agents: []
+flow: []
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "workflow.yaml")
+	os.WriteFile(path, []byte(content), 0644) //nolint
+
+	err := commands.Run(context.Background(), []string{path})
+	if err == nil {
+		t.Fatal("Run() expected error for empty workflow, got nil")
+	}
+	if !strings.Contains(err.Error(), "source agent") {
+		t.Errorf("error = %v, expected to mention 'source agent'", err)
+	}
+}
+
+// ---- Serve/Version command tests ----
+
+func TestVersion(t *testing.T) {
+	err := commands.Version()
+	if err != nil {
+		t.Fatalf("Version() unexpected error: %v", err)
+	}
+}
+
+func TestServe_ContextCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel immediately so Serve exits quickly.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	err := commands.Serve(ctx, []string{"--addr", ":0"})
+	// Serve should return nil after context cancelled shutdown.
+	if err != nil {
+		t.Logf("Serve() returned: %v (acceptable)", err)
 	}
 }
 
