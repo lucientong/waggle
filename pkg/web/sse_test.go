@@ -15,6 +15,7 @@ import (
 
 func TestSSE_ConnectedPing(t *testing.T) {
 	srv := web.NewServer(web.DefaultConfig(), nil, nil)
+	defer srv.Close()
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -36,7 +37,7 @@ func TestSSE_ConnectedPing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /api/events error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
@@ -61,6 +62,7 @@ func TestSSE_ConnectedPing(t *testing.T) {
 
 func TestSSE_PublishEvent(t *testing.T) {
 	srv := web.NewServer(web.DefaultConfig(), nil, nil)
+	defer srv.Close()
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -76,7 +78,7 @@ func TestSSE_PublishEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /api/events error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	scanner := bufio.NewScanner(resp.Body)
 
@@ -110,6 +112,7 @@ func TestSSE_PublishEvent(t *testing.T) {
 
 func TestSSE_EventChannel(t *testing.T) {
 	srv := web.NewServer(web.DefaultConfig(), nil, nil)
+	defer srv.Close()
 
 	// EventChannel should return a writable channel.
 	ch := srv.EventChannel()
@@ -144,7 +147,7 @@ func TestSSE_Headers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /api/events error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	expectedHeaders := map[string]string{
 		"Content-Type":                "text/event-stream",
