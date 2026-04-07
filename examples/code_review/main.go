@@ -101,9 +101,9 @@ func ProcessItems(items []string) {
 			return "No issues found. Code looks good!", nil
 		}
 		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("Found %d issue(s) with %s severity:\n", len(result.Issues), result.Severity))
+		fmt.Fprintf(&sb, "Found %d issue(s) with %s severity:\n", len(result.Issues), result.Severity)
 		for i, issue := range result.Issues {
-			sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, issue))
+			fmt.Fprintf(&sb, "  %d. %s\n", i+1, issue)
 		}
 		return sb.String(), nil
 	})

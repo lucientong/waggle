@@ -111,11 +111,18 @@ func (s *Server) Start() error {
 	return s.httpServer.ListenAndServe()
 }
 
-// Shutdown gracefully stops the server.
+// Shutdown gracefully stops the server and the SSE hub.
 func (s *Server) Shutdown() error {
+	close(s.hub.stop) // stop the SSE hub goroutine
 	ctx, cancel := context.WithTimeout(context.Background(), s.config.ShutdownTimeout)
 	defer cancel()
 	return s.httpServer.Shutdown(ctx)
+}
+
+// Close stops the SSE hub goroutine without shutting down the HTTP server.
+// This is useful in tests that use httptest.NewServer (which manages its own lifecycle).
+func (s *Server) Close() {
+	close(s.hub.stop)
 }
 
 // PublishEvent sends an observability event to all connected SSE clients.

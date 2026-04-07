@@ -21,6 +21,7 @@ type sseHub struct {
 	register chan *sseClient
 	remove   chan *sseClient
 	inbound  chan observe.Event
+	stop     chan struct{} // closed to signal the hub's run loop to exit
 }
 
 // newSSEHub creates an unstarted SSE hub.
@@ -30,13 +31,18 @@ func newSSEHub() *sseHub {
 		register: make(chan *sseClient, 8),
 		remove:   make(chan *sseClient, 8),
 		inbound:  make(chan observe.Event, 256),
+		stop:     make(chan struct{}),
 	}
 }
 
 // run is the hub's event loop. Must be called in a separate goroutine.
+// It exits when the stop channel is closed.
 func (h *sseHub) run() {
 	for {
 		select {
+		case <-h.stop:
+			return
+
 		case c := <-h.register:
 			h.clients[c] = struct{}{}
 			slog.Debug("sse client connected", "total", len(h.clients))

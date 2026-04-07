@@ -140,7 +140,7 @@ func (p *openAIProvider) Chat(ctx context.Context, messages []Message) (string, 
 	if err != nil {
 		return "", fmt.Errorf("openai: http request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -192,7 +192,7 @@ func (p *openAIProvider) ChatStream(ctx context.Context, messages []Message) (<-
 	ch := make(chan string, 64)
 	go func() {
 		defer close(ch)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {

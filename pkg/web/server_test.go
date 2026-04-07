@@ -14,7 +14,9 @@ import (
 // newTestServer creates a Server with test defaults (nil waggle/metrics).
 func newTestServer(t *testing.T) *web.Server {
 	t.Helper()
-	return web.NewServer(web.DefaultConfig(), nil, nil)
+	srv := web.NewServer(web.DefaultConfig(), nil, nil)
+	t.Cleanup(func() { srv.Close() })
+	return srv
 }
 
 func TestHealth(t *testing.T) {
@@ -86,6 +88,7 @@ func TestAPIMetrics_WithData(t *testing.T) {
 	m.RecordSuccess("fetcher", 0, 200)
 
 	srv := web.NewServer(web.DefaultConfig(), nil, m)
+	defer srv.Close()
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 

@@ -128,6 +128,7 @@ func TestSSE_EventChannel(t *testing.T) {
 
 func TestSSE_Headers(t *testing.T) {
 	srv := web.NewServer(web.DefaultConfig(), nil, nil)
+	defer srv.Close()
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 

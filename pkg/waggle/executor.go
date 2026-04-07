@@ -10,13 +10,6 @@ import (
 	"github.com/lucientong/waggle/pkg/agent"
 )
 
-// result holds the output of a single agent execution.
-type result struct {
-	nodeID string
-	value  any
-	err    error
-}
-
 // Executor runs a DAG of untyped agents concurrently.
 //
 // The execution model:

@@ -124,11 +124,6 @@ func TestAnthropic_Chat_Success(t *testing.T) {
 	}))
 	defer srv2.Close()
 
-	type withBaseURL interface {
-		Info() llm.ProviderInfo
-		Chat(context.Context, []llm.Message) (string, error)
-	}
-
 	p2 := llm.NewAnthropic("key",
 		llm.WithAnthropicHTTPClient(srv2.Client()),
 	)
