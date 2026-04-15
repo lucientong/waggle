@@ -65,7 +65,7 @@ type observableChain3[A, B, C, D any] struct {
 	obs   Observer
 }
 
-func (c *observableChain3[A, B, C, D]) Name() string     { return c.name }
+func (c *observableChain3[A, B, C, D]) Name() string { return c.name }
 func (c *observableChain3[A, B, C, D]) Run(ctx context.Context, input A) (D, error) {
 	return c.inner.Run(ctx, input)
 }
