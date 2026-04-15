@@ -282,14 +282,106 @@ router := llm.NewRouter(
 result, _ := router.Chat(ctx, messages)
 ```
 
+### Memory — Conversation History
+
+```go
+import "github.com/lucientong/waggle/pkg/memory"
+
+// Three strategies:
+buffer := memory.NewBufferStore()           // keep everything
+window := memory.NewWindowStore(20)         // sliding window, pins system message
+summary := memory.NewSummaryStore(30, fn)   // LLM-powered compression
+
+// Attach to any LLM agent:
+chatbot := llm.NewLLMAgent("chatbot", provider, promptFn,
+    llm.WithMemory(memory.NewWindowStore(20)),
+)
+```
+
+### Structured Output
+
+```go
+import "github.com/lucientong/waggle/pkg/output"
+
+type Review struct {
+    Score  int      `json:"score" jsonschema:"description=Quality score 1-10"`
+    Issues []string `json:"issues"`
+}
+
+reviewer := output.NewStructuredAgent[string, Review](
+    "reviewer", provider,
+    func(code string) string { return "Review:\n" + code },
+    output.WithMaxRetries(2),
+)
+
+review, _ := reviewer.Run(ctx, code) // returns Review, not string
+```
+
+### Prompt Templates
+
+```go
+import "github.com/lucientong/waggle/pkg/prompt"
+
+tmpl := prompt.New("Analyze {{language}} code:\n{{code}}")
+rendered := tmpl.WithVar("language", "Go").WithVar("code", src).MustRender()
+
+fewShot := prompt.NewFewShot("Classify sentiment.").
+    AddExample("I love it", "positive").
+    BuildWithInput("Not bad")
+```
+
+### RAG Pipeline
+
+```go
+import "github.com/lucientong/waggle/pkg/rag"
+
+store := rag.NewInMemoryStore()
+rag.Ingest(ctx, text, "doc-1", embedder, store, splitter)
+
+pipeline := rag.NewPipeline("kb", embedder, store, provider, rag.WithTopK(5))
+answer, _ := pipeline.Run(ctx, "How do I configure the router?")
+```
+
+### Multi-Agent Conversations
+
+```go
+import "github.com/lucientong/waggle/pkg/conv"
+
+mod := conv.NewModerator("review",
+    conv.WithMaxRounds(5),
+    conv.WithTermination(consensusCheck),
+)
+mod.AddParticipant(analyst)
+mod.AddParticipant(reviewer)
+
+agent := conv.AsAgent(mod) // Agent[string, []Envelope]
+```
+
+### Observable Pipelines
+
+```go
+import "github.com/lucientong/waggle/pkg/stream"
+
+collector := &stream.Collector{}
+pipeline := stream.ObservableChain2(fetchAgent, reviewAgent, collector)
+result, _ := pipeline.Run(ctx, input)
+// collector.Steps has all intermediate steps
+```
+
 ## Project Structure
 
 ```
 waggle/
 ├── pkg/
-│   ├── agent/      # Agent interface, FuncAgent, Chain, wrappers (Retry/Timeout/Cache)
+│   ├── agent/      # Agent interface, FuncAgent, Chain, wrappers
 │   ├── waggle/     # Core orchestrator, DAG, executor, patterns
-│   ├── llm/        # LLM providers (OpenAI, Anthropic, Ollama) + LLM/Tool agents
+│   ├── llm/        # LLM providers + LLM/Tool agents + memory integration
+│   ├── memory/     # Conversation memory (Buffer, Window, Summary)
+│   ├── output/     # Structured output parsing + JSON Schema
+│   ├── prompt/     # Prompt templates + few-shot builder
+│   ├── rag/        # RAG pipeline (Embedder, VectorStore, Splitter)
+│   ├── conv/       # Multi-agent conversation protocol
+│   ├── stream/     # Observable pipelines + step streaming
 │   ├── observe/    # Events, tracing, metrics, structured logging
 │   └── web/        # Embedded web visualization panel
 ├── cmd/waggle/     # CLI: run / serve / validate / dot
@@ -316,6 +408,8 @@ waggle/
 - [x] **Phase 6** — Embedded web DAG visualization panel
 - [x] **Phase 7** — CLI (`waggle run / serve / validate / dot`)
 - [x] **Phase 8** — Real-world examples (code review, research, customer support)
+- [x] **Phase 9** — Memory, Structured Output, Prompt Templates
+- [x] **Phase 10** — RAG Pipeline, Multi-Agent Conversations, Observable Pipelines
 
 ## Requirements
 

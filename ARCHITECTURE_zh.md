@@ -42,6 +42,12 @@
 - [10. 数据流架构](#10-数据流架构)
 - [11. 并发模型](#11-并发模型)
 - [12. 依赖策略](#12-依赖策略)
+- [13. 记忆层 — `pkg/memory`](#13-记忆层--pkgmemory)
+- [14. 结构化输出 — `pkg/output`](#14-结构化输出--pkgoutput)
+- [15. 提示词模板 — `pkg/prompt`](#15-提示词模板--pkgprompt)
+- [16. 可观测流水线 — `pkg/stream`](#16-可观测流水线--pkgstream)
+- [17. RAG 管道 — `pkg/rag`](#17-rag-管道--pkgrag)
+- [18. 多 Agent 对话 — `pkg/conv`](#18-多-agent-对话--pkgconv)
 
 ---
 
@@ -68,6 +74,17 @@
 │   │ Ollama/路由器    │ 指标/日志         │ D3.js 可视化       │   │
 │   │ LLMAgent/Tool   │                  │                    │   │
 │   └─────────────────┴──────────────────┴────────────────────┘   │
+│                                                                  │
+│   ┌─────────────────┬──────────┬──────────┬──────────────────┐   │
+│   │   pkg/memory    │ pkg/output│ pkg/prompt│   pkg/stream    │   │
+│   │ Buffer/Window   │ JSONParser│ Template │ Observer/Chain   │   │
+│   │ Summary/Store   │ SchemaFor │ FewShot  │ Step/Collector   │   │
+│   └─────────────────┴──────────┴──────────┴──────────────────┘   │
+│   ┌──────────────────────────┬───────────────────────────────┐   │
+│   │       pkg/rag            │         pkg/conv              │   │
+│   │ Embedder/VectorStore     │ Channel/Participant           │   │
+│   │ Splitter/Pipeline        │ Moderator/Envelope            │   │
+│   └──────────────────────────┴───────────────────────────────┘   │
 │                                                                  │
 │   ┌─────────────────────────────────────────────────────────┐   │
 │   │             cmd/waggle（CLI 命令行）                      │   │
@@ -777,6 +794,11 @@ waggle.RunFrom() ──────────────> TopologicalSort()
 | `observe.Metrics` | `sync.RWMutex` | 多读单写 |
 | `observe.Tracer` | `sync.Mutex` | 安全的 Span 记录 |
 | `sseHub` | 基于 channel（单 goroutine 事件循环） | 无需锁 |
+| `memory.BufferStore` | `sync.RWMutex` | 安全的并发读写 |
+| `memory.WindowStore` | `sync.RWMutex` | 安全的并发读写 |
+| `memory.SummaryStore` | `sync.RWMutex` | 安全的并发读写（摘要在锁内执行） |
+| `rag.InMemoryStore` | `sync.RWMutex` | 安全的并发添加/搜索 |
+| `conv.Channel` | `sync.Mutex` | 安全的并发发送/接收 |
 
 ### Goroutine 生命周期
 
@@ -798,7 +820,7 @@ Executor.Run()
 ## 12. 依赖策略
 
 ```
-核心包 (pkg/agent, pkg/waggle, pkg/observe, pkg/web):
+核心包 (pkg/agent, pkg/waggle, pkg/observe, pkg/web, pkg/memory, pkg/output, pkg/prompt, pkg/stream, pkg/rag, pkg/conv):
     └── 仅 Go 标准库
         ├── context, sync, time
         ├── net/http, encoding/json
@@ -814,4 +836,539 @@ CLI (cmd/waggle/commands):
 
 ---
 
-*Waggle v0.1.0 — Apache 2.0 License*
+## 13. 记忆层 — `pkg/memory`
+
+### 目的与设计原理
+
+记忆包为 LLM Agent 提供对话记忆能力，支持多轮交互，让历史消息影响后续响应。记忆层与 LLM 包解耦，以避免循环导入，并允许多种记忆策略独立组合。
+
+`Message` 类型故意使用 `string` 表示 `Role`（而非 `llm.Role`），以打破对 `pkg/llm` 包的依赖，保持记忆层自包含，可被任何包导入。
+
+### 核心接口与类型
+
+```go
+// Store 是对话历史的核心记忆接口。
+type Store interface {
+    // Add 向对话历史追加一条消息。
+    Add(ctx context.Context, msg Message) error
+    // Messages 返回当前对话历史。
+    Messages(ctx context.Context) ([]Message, error)
+    // Clear 清除存储中的所有消息。
+    Clear(ctx context.Context) error
+}
+
+// Message 表示一条对话消息。
+type Message struct {
+    Role    string // "system", "user", "assistant" — 使用 string 避免导入 llm
+    Content string
+}
+```
+
+#### BufferStore — 无界历史
+
+`BufferStore` 是最简单的实现：一个由 `sync.RWMutex` 保护的追加式消息切片。适用于短对话或由调用方在外部管理截断的场景。
+
+```go
+type BufferStore struct {
+    mu       sync.RWMutex
+    messages []Message
+}
+```
+
+#### WindowStore — 滑动窗口
+
+`WindowStore` 保留最近的 `n` 条消息，同时始终将置顶的 system 消息保留在前端。当超过窗口限制时，最老的非 system 消息会被丢弃。
+
+```go
+type WindowStore struct {
+    mu       sync.RWMutex
+    messages []Message
+    maxSize  int
+}
+```
+
+#### SummaryStore — 摘要压缩
+
+`SummaryStore` 监控消息数量，当超过阈值时触发 `Summarizer` 函数。摘要器将旧消息压缩为单条摘要消息，使对话保持在上下文限制内。
+
+```go
+// Summarizer 将一组消息压缩为一条摘要消息。
+type Summarizer func(ctx context.Context, messages []Message) (Message, error)
+
+type SummaryStore struct {
+    mu         sync.RWMutex
+    messages   []Message
+    threshold  int
+    summarizer Summarizer
+}
+```
+
+### 与现有包的集成
+
+记忆通过 `llm.WithMemory(store)` 选项与 LLM 层集成。当配置了记忆时，Agent 会在每次调用前自动加载对话历史，并在每次调用后追加用户输入和助手响应。
+
+```go
+agent := llm.NewLLMAgent[string]("chatbot", provider,
+    llm.WithSystemPrompt("You are a helpful assistant."),
+    llm.WithMemory(memory.NewWindowStore(20)),
+)
+```
+
+### 线程安全
+
+所有 Store 实现均使用 `sync.RWMutex` 保证安全的并发访问。`Add` 和 `Clear` 获取写锁；`Messages` 获取读锁。`SummaryStore` 在写锁下执行摘要操作，防止并发读取观察到部分压缩的历史。
+
+---
+
+## 14. 结构化输出 — `pkg/output`
+
+### 目的与设计原理
+
+输出包使 LLM Agent 能够返回有类型的 Go 结构体，而非原始字符串。这弥合了非结构化 LLM 文本与类型安全 `Agent[I, O]` 管道之间的鸿沟。该包使用三级提取策略，以最大化兼容不同 JSON 格式的 LLM。
+
+### 核心接口与类型
+
+```go
+// Parser[O] 从原始 LLM 输出中提取有类型的值。
+type Parser[O any] interface {
+    // Parse 尝试从原始字符串中提取类型为 O 的值。
+    Parse(raw string) (O, error)
+    // FormatInstruction 返回追加到提示词的字符串，
+    // 指导 LLM 按预期格式输出。
+    FormatInstruction() string
+}
+```
+
+#### JSONParser — 三级提取
+
+`JSONParser[O]` 使用三级策略尝试将 LLM 输出解析为 JSON：
+
+1. **直接解析：** 尝试对整个响应执行 `json.Unmarshal`。
+2. **代码块提取：** 查找 `` ```json ... ``` `` 围栏代码块并解析其内容。
+3. **括号匹配：** 查找最外层的 `{...}` 或 `[...]` 并解析该子串。
+
+这优雅地处理了 LLM 将 JSON 包裹在 markdown 中、添加前导文本或包含尾部注释的情况。
+
+```go
+type JSONParser[O any] struct{}
+
+func (p JSONParser[O]) Parse(raw string) (O, error)
+func (p JSONParser[O]) FormatInstruction() string
+```
+
+#### SchemaFor — 基于反射的 JSON Schema
+
+`SchemaFor[O]()` 从 Go 结构体的类型信息和 struct tag 生成 JSON Schema 字符串。该 Schema 包含在提示词指令中，让 LLM 准确知道应产生哪些字段和类型。
+
+```go
+func SchemaFor[O any]() string
+```
+
+#### NewStructuredAgent — 带解析和重试的 Agent
+
+`NewStructuredAgent` 将 LLM Agent 和 `Parser[O]` 组合成 `Agent[I, O]`。如果解析失败，它会重试 LLM 调用（最多可配置次数），并在增强的提示词中包含解析错误，给 LLM 修正输出的机会。
+
+```go
+func NewStructuredAgent[I, O any](name string, llmAgent agent.Agent[I, string], parser Parser[O]) agent.Agent[I, O]
+```
+
+### 与现有包的集成
+
+`NewStructuredAgent` 返回标准的 `Agent[I, O]`，因此可与 `Chain`、`Parallel`、`WithRetry` 及所有其他 Agent 原语完全组合。它将非类型化的 LLM 世界与类型化的管道世界桥接起来。
+
+```go
+type Review struct {
+    Score    int    `json:"score"`
+    Summary  string `json:"summary"`
+    Issues   []string `json:"issues"`
+}
+
+reviewer := output.NewStructuredAgent[string, Review]("reviewer", llmAgent, output.JSONParser[Review]{})
+// reviewer 是 Agent[string, Review] — 完全可组合
+pipeline := agent.Chain2(fetcher, reviewer)
+```
+
+### 线程安全
+
+`JSONParser` 和 `SchemaFor` 是无状态的，可安全并发使用。`NewStructuredAgent` 将并发安全性委托给底层的 LLM Agent。
+
+---
+
+## 15. 提示词模板 — `pkg/prompt`
+
+### 目的与设计原理
+
+提示词包提供轻量级、零依赖的模板系统，用于构造 LLM 提示词。它避免使用外部模板引擎（如 `text/template`），采用更简单的 `{{var}}` 占位符语法，更易读、更不容易出错，且符合零依赖的设计理念。
+
+### 核心接口与类型
+
+#### Template — 不可变变量替换
+
+`Template` 使用 `{{var}}` 占位符，遵循不可变设计：`WithVar` 返回新的 `Template` 而非修改原始对象，使模板可安全地在 goroutine 间共享和重用。
+
+```go
+type Template struct {
+    raw  string
+    vars map[string]string
+}
+
+func New(raw string) Template
+func (t Template) WithVar(name, value string) Template
+func (t Template) Render() string
+```
+
+#### FewShotBuilder — 基于示例的提示词
+
+`FewShotBuilder` 构建 few-shot 提示词，包含系统指令、一组输入/输出示例和最终输入。这种模式有效引导 LLM 产生一致的输出格式。
+
+```go
+type FewShotBuilder struct {
+    instruction string
+    examples    []Example
+}
+
+type Example struct {
+    Input  string
+    Output string
+}
+
+func NewFewShot(instruction string) *FewShotBuilder
+func (b *FewShotBuilder) Add(input, output string) *FewShotBuilder
+func (b *FewShotBuilder) BuildWithInput(input string) string
+```
+
+#### AsPromptFunc — LLMAgent 兼容
+
+`AsPromptFunc()` 将 `Template` 转换为与 `llm.NewLLMAgent` 兼容的 `PromptFunc`，桥接提示词层和 LLM 层。
+
+```go
+func (t Template) AsPromptFunc() func(ctx context.Context, input string) ([]llm.Message, error)
+```
+
+### 与现有包的集成
+
+模板通过转换为 `NewLLMAgent` 接受的 `PromptFunc` 值与 LLM 层集成。也可独立用于任何字符串格式化需求。
+
+```go
+tmpl := prompt.New("Analyze {{language}} code:\n{{code}}")
+agent := llm.NewLLMAgent[string]("analyzer", provider,
+    llm.WithPromptFunc(tmpl.WithVar("language", "Go").AsPromptFunc()),
+)
+```
+
+### 线程安全
+
+`Template` 是不可变的 — `WithVar` 返回新实例。这使模板天然支持并发使用，无需同步。
+
+---
+
+## 16. 可观测流水线 — `pkg/stream`
+
+### 目的与设计原理
+
+流式包为 Agent 管道添加可观测性，在每个 Agent 边界发射结构化的 `Step` 事件。这支持实时进度追踪、调试，以及通过 SSE 与 Web 可视化层集成。
+
+### 核心接口与类型
+
+#### Step — 管道事件
+
+```go
+type Step struct {
+    AgentName string
+    StepType  StepType  // "started", "chunk", "completed", "error"
+    Content   string
+    Index     int
+    Timestamp time.Time
+}
+
+type StepType string
+
+const (
+    StepStarted   StepType = "started"
+    StepChunk     StepType = "chunk"
+    StepCompleted StepType = "completed"
+    StepError     StepType = "error"
+)
+```
+
+#### Observer — 事件接收器
+
+```go
+// Observer 接收管道步骤事件。
+type Observer interface {
+    OnStep(step Step)
+}
+
+// ObserverFunc 是 Observer 的函数适配器。
+type ObserverFunc func(Step)
+
+func (f ObserverFunc) OnStep(step Step) { f(step) }
+```
+
+#### 可观测 Chain
+
+`ObservableChain2` 和 `ObservableChain3` 包装 `agent.Chain2`/`Chain3`，在每个 Agent 边界发射步骤事件：
+
+```go
+func ObservableChain2[A, B, C any](
+    a agent.Agent[A, B],
+    b agent.Agent[B, C],
+    observers ...Observer,
+) agent.Agent[A, C]
+
+func ObservableChain3[A, B, C, D any](
+    a agent.Agent[A, B],
+    b agent.Agent[B, C],
+    c agent.Agent[C, D],
+    observers ...Observer,
+) agent.Agent[A, D]
+```
+
+#### MultiObserver 和 Collector
+
+`MultiObserver` 将步骤扇出到多个观察者。`Collector` 将步骤累积到切片中，用于测试和检查。
+
+```go
+type MultiObserver struct {
+    observers []Observer
+}
+
+type Collector struct {
+    mu    sync.Mutex
+    Steps []Step
+}
+
+func (c *Collector) OnStep(step Step)
+```
+
+### 与现有包的集成
+
+可观测 Chain 是标准 Chain 的直接替代品 — 它们返回相同的 `Agent[I, O]` 类型。步骤可以转发到 `web/sse.go` Hub，用于仪表盘的实时 UI 更新。
+
+```go
+obs := stream.ObserverFunc(func(s stream.Step) {
+    sseHub.Broadcast(s) // 转发到 Web 仪表盘
+})
+pipeline := stream.ObservableChain2(fetcher, parser, obs)
+```
+
+### 线程安全
+
+`Collector` 使用 `sync.Mutex` 保护 `Steps` 切片，支持安全的并发累积。`ObserverFunc` 和 `MultiObserver` 将线程安全性委托给底层的 Observer 实现。
+
+---
+
+## 17. RAG 管道 — `pkg/rag`
+
+### 目的与设计原理
+
+RAG（检索增强生成）包提供完整的管道，用于将 LLM 响应基于外部知识。它定义了嵌入、向量存储和文本分割的接口，并提供零外部依赖的内存实现。
+
+### 核心接口与类型
+
+#### Embedder — 文本转向量
+
+```go
+// Embedder 将文本转换为向量嵌入。
+type Embedder interface {
+    // Embed 将一批文本字符串转换为嵌入向量。
+    Embed(ctx context.Context, texts []string) ([][]float64, error)
+    // Dimensions 返回嵌入向量的维度。
+    Dimensions() int
+}
+```
+
+#### VectorStore — 相似度搜索
+
+```go
+// Document 表示带有嵌入和元数据的文本块。
+type Document struct {
+    ID        string
+    Content   string
+    Embedding []float64
+    Metadata  map[string]string
+}
+
+// VectorStore 持久化和搜索文档嵌入。
+type VectorStore interface {
+    // Add 存储带有嵌入的文档。
+    Add(ctx context.Context, docs []Document) error
+    // Search 查找与查询向量最相似的 Top-K 文档。
+    Search(ctx context.Context, vector []float64, topK int) ([]Document, error)
+}
+```
+
+#### InMemoryStore — 零依赖向量搜索
+
+`InMemoryStore` 使用暴力余弦相似度搜索实现 `VectorStore`。由 `sync.RWMutex` 保护以支持安全的并发访问，无需外部向量数据库。
+
+```go
+type InMemoryStore struct {
+    mu   sync.RWMutex
+    docs []Document
+}
+```
+
+#### Splitter — 文本分块
+
+```go
+// Splitter 将文本分割为适合嵌入的块。
+type Splitter interface {
+    Split(text string) []string
+}
+
+// TokenSplitter 将文本分割为约 N 个 token 的块。
+type TokenSplitter struct {
+    ChunkSize    int
+    ChunkOverlap int
+}
+
+// ParagraphSplitter 按段落边界分割文本。
+type ParagraphSplitter struct{}
+```
+
+#### NewPipeline — 端到端 RAG
+
+`NewPipeline` 将完整的 RAG 流程组合为单个 `Agent[string, string]`：
+
+```
+查询 ──> Embed(query) ──> VectorStore.Search(topK) ──> 构建上下文提示词 ──> LLM ──> 回答
+```
+
+```go
+func NewPipeline(
+    embedder Embedder,
+    store VectorStore,
+    llmAgent agent.Agent[string, string],
+    topK int,
+) agent.Agent[string, string]
+```
+
+### 与现有包的集成
+
+`NewPipeline` 返回标准的 `Agent[string, string]`，因此可与 Chain、装饰器和编排模式组合。LLM Agent 参数可以是任何接受字符串提示词的 Agent，包括使用 `pkg/output` 构建的结构化响应 Agent。
+
+```go
+ragAgent := rag.NewPipeline(embedder, vectorStore, llmAgent, 5)
+pipeline := agent.Chain2(inputProcessor, ragAgent)
+reliable := agent.WithRetry(pipeline, agent.WithMaxAttempts(3))
+```
+
+### 线程安全
+
+`InMemoryStore` 使用 `sync.RWMutex` — `Add` 获取写锁，`Search` 获取读锁。这允许并发搜索同时序列化写入。管道本身除存储外无状态，将并发安全性委托给组件 Agent。
+
+---
+
+## 18. 多 Agent 对话 — `pkg/conv`
+
+### 目的与设计原理
+
+对话包支持多 Agent 对话，多个参与者在结构化的轮次协议中交换消息。这适用于辩论式推理、协作问题解决和 Agent 间协商。`Moderator` 通过可配置的轮次、终止条件和发言顺序来编排对话流程。
+
+### 核心接口与类型
+
+#### Envelope — 消息容器
+
+```go
+// Envelope 用路由元数据包装消息。
+type Envelope struct {
+    From    string // 发送方参与者名称
+    To      string // 接收方参与者名称（"" 表示广播）
+    Content string
+    Round   int
+}
+```
+
+#### Channel — 线程安全消息队列
+
+`Channel` 是线程安全的 FIFO 队列，用于在参与者之间传递信封：
+
+```go
+type Channel struct {
+    mu       sync.Mutex
+    messages []Envelope
+}
+
+func (c *Channel) Send(env Envelope)
+func (c *Channel) Receive() ([]Envelope, bool)
+func (c *Channel) Clear()
+```
+
+#### Participant — 对话成员
+
+```go
+// Participant 是可参与多 Agent 对话的实体。
+type Participant interface {
+    // Name 返回参与者的唯一标识符。
+    Name() string
+    // Respond 根据对话历史生成响应。
+    Respond(ctx context.Context, history []Envelope) (Envelope, error)
+}
+
+// FuncParticipant 将函数适配为 Participant。
+type FuncParticipant struct {
+    name string
+    fn   func(ctx context.Context, history []Envelope) (Envelope, error)
+}
+```
+
+#### Moderator — 轮次编排器
+
+`Moderator` 管理对话流程：
+
+```go
+type Moderator struct {
+    participants []Participant
+    maxRounds    int
+    turnOrder    []string          // 自定义发言顺序（可选）
+    termination  func([]Envelope) bool // 提前终止条件
+}
+
+func NewModerator(participants []Participant, opts ...ModeratorOption) *Moderator
+func (m *Moderator) Run(ctx context.Context, topic string) ([]Envelope, error)
+```
+
+**对话流程：**
+
+```
+话题 ──> 第 1 轮: 参与者 A 响应
+                   参与者 B 响应
+          第 2 轮: 参与者 A 响应
+                   参与者 B 响应
+          ...
+          达到终止条件 或 达到最大轮次
+          ──> 返回完整对话历史
+```
+
+#### AsAgent — Moderator 作为 Agent
+
+`AsAgent()` 将 `Moderator` 转换为标准的 `Agent[string, []Envelope]`，使对话可以嵌入更大的管道。
+
+```go
+func (m *Moderator) AsAgent() agent.Agent[string, []Envelope]
+```
+
+### 与现有包的集成
+
+通过 `AsAgent()`，多 Agent 对话成为常规管道节点。参与者内部可以使用 `pkg/llm` Agent、`pkg/memory` 存储或 `pkg/rag` 管道，支持丰富的对话工作流。
+
+```go
+debater1 := conv.FuncParticipant("optimist", optimistFn)
+debater2 := conv.FuncParticipant("critic", criticFn)
+mod := conv.NewModerator([]conv.Participant{debater1, debater2},
+    conv.WithMaxRounds(5),
+    conv.WithTermination(consensusReached),
+)
+// 在管道中作为 Agent 使用
+debate := mod.AsAgent() // Agent[string, []Envelope]
+pipeline := agent.Chain2(topicGenerator, agent.Erase(debate))
+```
+
+### 线程安全
+
+`Channel` 使用 `sync.Mutex` 保证安全的并发发送和接收操作。`Moderator` 本身按顺序驱动对话（每轮一次一个参与者），因此不需要额外同步。参与者负责自身内部的线程安全。
+
+---
+
+*Waggle v0.6.0 — Apache 2.0 License*

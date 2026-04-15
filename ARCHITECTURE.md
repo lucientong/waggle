@@ -42,6 +42,12 @@
 - [10. Data Flow Architecture](#10-data-flow-architecture)
 - [11. Concurrency Model](#11-concurrency-model)
 - [12. Dependency Strategy](#12-dependency-strategy)
+- [13. Memory Layer — `pkg/memory`](#13-memory-layer--pkgmemory)
+- [14. Structured Output — `pkg/output`](#14-structured-output--pkgoutput)
+- [15. Prompt Templates — `pkg/prompt`](#15-prompt-templates--pkgprompt)
+- [16. Observable Pipelines — `pkg/stream`](#16-observable-pipelines--pkgstream)
+- [17. RAG Pipeline — `pkg/rag`](#17-rag-pipeline--pkgrag)
+- [18. Multi-Agent Conversations — `pkg/conv`](#18-multi-agent-conversations--pkgconv)
 
 ---
 
@@ -68,6 +74,17 @@
 │   │ Ollama/Router   │ Metrics/Logger   │ D3.js Visualizer   │   │
 │   │ LLMAgent/Tool   │                  │                    │   │
 │   └─────────────────┴──────────────────┴────────────────────┘   │
+│                                                                  │
+│   ┌─────────────────┬──────────┬──────────┬──────────────────┐   │
+│   │   pkg/memory    │ pkg/output│ pkg/prompt│   pkg/stream    │   │
+│   │ Buffer/Window   │ JSONParser│ Template │ Observer/Chain   │   │
+│   │ Summary/Store   │ SchemaFor │ FewShot  │ Step/Collector   │   │
+│   └─────────────────┴──────────┴──────────┴──────────────────┘   │
+│   ┌──────────────────────────┬───────────────────────────────┐   │
+│   │       pkg/rag            │         pkg/conv              │   │
+│   │ Embedder/VectorStore     │ Channel/Participant           │   │
+│   │ Splitter/Pipeline        │ Moderator/Envelope            │   │
+│   └──────────────────────────┴───────────────────────────────┘   │
 │                                                                  │
 │   ┌─────────────────────────────────────────────────────────┐   │
 │   │             cmd/waggle (CLI)                             │   │
@@ -778,6 +795,11 @@ waggle.RunFrom() ──────────────> TopologicalSort()
 | `observe.Metrics` | `sync.RWMutex` | Multiple readers, exclusive writer |
 | `observe.Tracer` | `sync.Mutex` | Safe span recording |
 | `sseHub` | Channel-based (single goroutine event loop) | No locks needed |
+| `memory.BufferStore` | `sync.RWMutex` | Safe concurrent read/write |
+| `memory.WindowStore` | `sync.RWMutex` | Safe concurrent read/write |
+| `memory.SummaryStore` | `sync.RWMutex` | Safe concurrent read/write (summarization under lock) |
+| `rag.InMemoryStore` | `sync.RWMutex` | Safe concurrent add/search |
+| `conv.Channel` | `sync.Mutex` | Safe concurrent send/receive |
 
 ### Goroutine Lifecycle
 
@@ -799,7 +821,7 @@ Executor.Run()
 ## 12. Dependency Strategy
 
 ```
-Core packages (pkg/agent, pkg/waggle, pkg/observe, pkg/web):
+Core packages (pkg/agent, pkg/waggle, pkg/observe, pkg/web, pkg/memory, pkg/output, pkg/prompt, pkg/stream, pkg/rag, pkg/conv):
     └── Go standard library only
         ├── context, sync, time
         ├── net/http, encoding/json
@@ -815,4 +837,539 @@ This means the **core engine can be embedded in any Go application with zero tra
 
 ---
 
-*Waggle v0.1.0 — Apache 2.0 License*
+## 13. Memory Layer — `pkg/memory`
+
+### Purpose and Design Rationale
+
+The memory package provides conversational memory for LLM agents, enabling multi-turn interactions where past messages influence future responses. Memory is decoupled from the LLM package to avoid import cycles and to allow multiple memory strategies to be composed independently.
+
+The `Message` type deliberately uses `string` for `Role` (not `llm.Role`) to break the dependency on the `pkg/llm` package, keeping the memory layer self-contained and importable by any package.
+
+### Key Interfaces and Types
+
+```go
+// Store is the core memory interface for conversational history.
+type Store interface {
+    // Add appends a message to the conversation history.
+    Add(ctx context.Context, msg Message) error
+    // Messages returns the current conversation history.
+    Messages(ctx context.Context) ([]Message, error)
+    // Clear removes all messages from the store.
+    Clear(ctx context.Context) error
+}
+
+// Message represents a single conversational message.
+type Message struct {
+    Role    string // "system", "user", "assistant" — string to avoid llm import
+    Content string
+}
+```
+
+#### BufferStore — Unbounded History
+
+`BufferStore` is the simplest implementation: an append-only slice of messages protected by `sync.RWMutex`. Suitable for short conversations or when the caller manages truncation externally.
+
+```go
+type BufferStore struct {
+    mu       sync.RWMutex
+    messages []Message
+}
+```
+
+#### WindowStore — Sliding Window
+
+`WindowStore` keeps the most recent `n` messages while always preserving pinned system messages at the front. When the window limit is exceeded, the oldest non-system messages are dropped.
+
+```go
+type WindowStore struct {
+    mu       sync.RWMutex
+    messages []Message
+    maxSize  int
+}
+```
+
+#### SummaryStore — Compression via Summarization
+
+`SummaryStore` monitors the message count and triggers a `Summarizer` function when the threshold is exceeded. The summarizer compresses older messages into a single summary message, keeping the conversation within context limits.
+
+```go
+// Summarizer compresses a slice of messages into a summary message.
+type Summarizer func(ctx context.Context, messages []Message) (Message, error)
+
+type SummaryStore struct {
+    mu         sync.RWMutex
+    messages   []Message
+    threshold  int
+    summarizer Summarizer
+}
+```
+
+### Integration with Existing Packages
+
+Memory integrates with the LLM layer via the `llm.WithMemory(store)` option on `LLMAgent`. When memory is configured, the agent automatically loads conversation history before each call and appends the user input and assistant response after each call.
+
+```go
+agent := llm.NewLLMAgent[string]("chatbot", provider,
+    llm.WithSystemPrompt("You are a helpful assistant."),
+    llm.WithMemory(memory.NewWindowStore(20)),
+)
+```
+
+### Thread Safety
+
+All store implementations use `sync.RWMutex` to guarantee safe concurrent access. `Add` and `Clear` acquire a write lock; `Messages` acquires a read lock. `SummaryStore` performs summarization under the write lock to prevent concurrent reads from observing a partially compressed history.
+
+---
+
+## 14. Structured Output — `pkg/output`
+
+### Purpose and Design Rationale
+
+The output package enables LLM agents to return typed Go structs instead of raw strings. This bridges the gap between unstructured LLM text and the type-safe `Agent[I, O]` pipeline. The package uses a three-tier extraction strategy to maximize compatibility across LLMs that may format JSON differently.
+
+### Key Interfaces and Types
+
+```go
+// Parser[O] extracts a typed value from raw LLM output.
+type Parser[O any] interface {
+    // Parse attempts to extract a value of type O from the raw string.
+    Parse(raw string) (O, error)
+    // FormatInstruction returns a string to append to the prompt,
+    // instructing the LLM on the expected output format.
+    FormatInstruction() string
+}
+```
+
+#### JSONParser — Three-Tier Extraction
+
+`JSONParser[O]` attempts to parse LLM output as JSON using a three-tier strategy:
+
+1. **Direct parse:** Try `json.Unmarshal` on the entire response.
+2. **Code block extraction:** Look for `` ```json ... ``` `` fenced blocks and parse the content.
+3. **Bracket matching:** Find the outermost `{...}` or `[...]` and parse that substring.
+
+This gracefully handles LLMs that wrap JSON in markdown, add preamble text, or include trailing commentary.
+
+```go
+type JSONParser[O any] struct{}
+
+func (p JSONParser[O]) Parse(raw string) (O, error)
+func (p JSONParser[O]) FormatInstruction() string
+```
+
+#### SchemaFor — Reflection-Based JSON Schema
+
+`SchemaFor[O]()` generates a JSON Schema string from a Go struct's type information and struct tags. This schema is included in the prompt instruction so the LLM knows exactly what fields and types to produce.
+
+```go
+func SchemaFor[O any]() string
+```
+
+#### NewStructuredAgent — Agent with Parse + Retry
+
+`NewStructuredAgent` wraps an LLM agent and a `Parser[O]` into an `Agent[I, O]`. If parsing fails, it retries the LLM call (up to a configurable limit) with an augmented prompt that includes the parse error, giving the LLM a chance to correct its output.
+
+```go
+func NewStructuredAgent[I, O any](name string, llmAgent agent.Agent[I, string], parser Parser[O]) agent.Agent[I, O]
+```
+
+### Integration with Existing Packages
+
+`NewStructuredAgent` returns a standard `Agent[I, O]`, making it fully composable with `Chain`, `Parallel`, `WithRetry`, and all other agent primitives. It bridges the untyped LLM world with the typed pipeline world.
+
+```go
+type Review struct {
+    Score    int    `json:"score"`
+    Summary  string `json:"summary"`
+    Issues   []string `json:"issues"`
+}
+
+reviewer := output.NewStructuredAgent[string, Review]("reviewer", llmAgent, output.JSONParser[Review]{})
+// reviewer is Agent[string, Review] — fully composable
+pipeline := agent.Chain2(fetcher, reviewer)
+```
+
+### Thread Safety
+
+`JSONParser` and `SchemaFor` are stateless and safe for concurrent use. `NewStructuredAgent` delegates concurrency guarantees to the underlying LLM agent.
+
+---
+
+## 15. Prompt Templates — `pkg/prompt`
+
+### Purpose and Design Rationale
+
+The prompt package provides a lightweight, dependency-free template system for constructing LLM prompts. It avoids external template engines (e.g., `text/template`) in favor of a simpler `{{var}}` placeholder syntax that is easier to read, less error-prone, and aligns with the zero-dependency philosophy.
+
+### Key Interfaces and Types
+
+#### Template — Immutable Variable Substitution
+
+`Template` uses `{{var}}` placeholders and follows an immutable design: `WithVar` returns a new `Template` rather than mutating the original, making templates safe to share and reuse across goroutines.
+
+```go
+type Template struct {
+    raw  string
+    vars map[string]string
+}
+
+func New(raw string) Template
+func (t Template) WithVar(name, value string) Template
+func (t Template) Render() string
+```
+
+#### FewShotBuilder — Example-Based Prompts
+
+`FewShotBuilder` constructs few-shot prompts with a system instruction, a set of input/output examples, and a final input. This pattern is effective for guiding LLMs to produce consistent output formats.
+
+```go
+type FewShotBuilder struct {
+    instruction string
+    examples    []Example
+}
+
+type Example struct {
+    Input  string
+    Output string
+}
+
+func NewFewShot(instruction string) *FewShotBuilder
+func (b *FewShotBuilder) Add(input, output string) *FewShotBuilder
+func (b *FewShotBuilder) BuildWithInput(input string) string
+```
+
+#### AsPromptFunc — LLMAgent Compatibility
+
+`AsPromptFunc()` converts a `Template` into a `PromptFunc` compatible with `llm.NewLLMAgent`, bridging the prompt and LLM layers.
+
+```go
+func (t Template) AsPromptFunc() func(ctx context.Context, input string) ([]llm.Message, error)
+```
+
+### Integration with Existing Packages
+
+Templates integrate with the LLM layer by converting to `PromptFunc` values that `NewLLMAgent` accepts. They can also be used standalone for any string-formatting need.
+
+```go
+tmpl := prompt.New("Analyze {{language}} code:\n{{code}}")
+agent := llm.NewLLMAgent[string]("analyzer", provider,
+    llm.WithPromptFunc(tmpl.WithVar("language", "Go").AsPromptFunc()),
+)
+```
+
+### Thread Safety
+
+`Template` is immutable — `WithVar` returns a new instance. This makes templates inherently safe for concurrent use without synchronization.
+
+---
+
+## 16. Observable Pipelines — `pkg/stream`
+
+### Purpose and Design Rationale
+
+The stream package adds observability to agent pipelines by emitting structured `Step` events at each agent boundary. This enables real-time progress tracking, debugging, and integration with the web visualization layer via SSE.
+
+### Key Interfaces and Types
+
+#### Step — Pipeline Event
+
+```go
+type Step struct {
+    AgentName string
+    StepType  StepType  // "started", "chunk", "completed", "error"
+    Content   string
+    Index     int
+    Timestamp time.Time
+}
+
+type StepType string
+
+const (
+    StepStarted   StepType = "started"
+    StepChunk     StepType = "chunk"
+    StepCompleted StepType = "completed"
+    StepError     StepType = "error"
+)
+```
+
+#### Observer — Event Sink
+
+```go
+// Observer receives pipeline step events.
+type Observer interface {
+    OnStep(step Step)
+}
+
+// ObserverFunc is a function adapter for Observer.
+type ObserverFunc func(Step)
+
+func (f ObserverFunc) OnStep(step Step) { f(step) }
+```
+
+#### Observable Chains
+
+`ObservableChain2` and `ObservableChain3` wrap `agent.Chain2`/`Chain3` with step emission at each agent boundary:
+
+```go
+func ObservableChain2[A, B, C any](
+    a agent.Agent[A, B],
+    b agent.Agent[B, C],
+    observers ...Observer,
+) agent.Agent[A, C]
+
+func ObservableChain3[A, B, C, D any](
+    a agent.Agent[A, B],
+    b agent.Agent[B, C],
+    c agent.Agent[C, D],
+    observers ...Observer,
+) agent.Agent[A, D]
+```
+
+#### MultiObserver and Collector
+
+`MultiObserver` fans out steps to multiple observers. `Collector` accumulates steps in a slice for testing and inspection.
+
+```go
+type MultiObserver struct {
+    observers []Observer
+}
+
+type Collector struct {
+    mu    sync.Mutex
+    Steps []Step
+}
+
+func (c *Collector) OnStep(step Step)
+```
+
+### Integration with Existing Packages
+
+Observable chains are drop-in replacements for standard chains — they return the same `Agent[I, O]` type. Steps can be forwarded to the `web/sse.go` hub for real-time UI updates in the dashboard.
+
+```go
+obs := stream.ObserverFunc(func(s stream.Step) {
+    sseHub.Broadcast(s) // forward to web dashboard
+})
+pipeline := stream.ObservableChain2(fetcher, parser, obs)
+```
+
+### Thread Safety
+
+`Collector` uses `sync.Mutex` to protect the `Steps` slice for safe concurrent accumulation. `ObserverFunc` and `MultiObserver` delegate thread safety to the underlying observer implementations.
+
+---
+
+## 17. RAG Pipeline — `pkg/rag`
+
+### Purpose and Design Rationale
+
+The RAG (Retrieval-Augmented Generation) package provides a complete pipeline for grounding LLM responses in external knowledge. It defines interfaces for embedding, vector storage, and text splitting, with in-memory implementations that require zero external dependencies.
+
+### Key Interfaces and Types
+
+#### Embedder — Text to Vectors
+
+```go
+// Embedder converts text into vector embeddings.
+type Embedder interface {
+    // Embed converts a batch of text strings into embedding vectors.
+    Embed(ctx context.Context, texts []string) ([][]float64, error)
+    // Dimensions returns the dimensionality of the embedding vectors.
+    Dimensions() int
+}
+```
+
+#### VectorStore — Similarity Search
+
+```go
+// Document represents a text chunk with its embedding and metadata.
+type Document struct {
+    ID        string
+    Content   string
+    Embedding []float64
+    Metadata  map[string]string
+}
+
+// VectorStore persists and searches document embeddings.
+type VectorStore interface {
+    // Add stores documents with their embeddings.
+    Add(ctx context.Context, docs []Document) error
+    // Search finds the top-K most similar documents to the query vector.
+    Search(ctx context.Context, vector []float64, topK int) ([]Document, error)
+}
+```
+
+#### InMemoryStore — Zero-Dependency Vector Search
+
+`InMemoryStore` implements `VectorStore` using brute-force cosine similarity search. It is protected by `sync.RWMutex` for safe concurrent access and requires no external vector database.
+
+```go
+type InMemoryStore struct {
+    mu   sync.RWMutex
+    docs []Document
+}
+```
+
+#### Splitter — Text Chunking
+
+```go
+// Splitter breaks text into chunks suitable for embedding.
+type Splitter interface {
+    Split(text string) []string
+}
+
+// TokenSplitter splits text into chunks of approximately N tokens.
+type TokenSplitter struct {
+    ChunkSize    int
+    ChunkOverlap int
+}
+
+// ParagraphSplitter splits text on paragraph boundaries.
+type ParagraphSplitter struct{}
+```
+
+#### NewPipeline — End-to-End RAG
+
+`NewPipeline` composes the full RAG flow into a single `Agent[string, string]`:
+
+```
+Query ──> Embed(query) ──> VectorStore.Search(topK) ──> Build context prompt ──> LLM ──> Answer
+```
+
+```go
+func NewPipeline(
+    embedder Embedder,
+    store VectorStore,
+    llmAgent agent.Agent[string, string],
+    topK int,
+) agent.Agent[string, string]
+```
+
+### Integration with Existing Packages
+
+`NewPipeline` returns a standard `Agent[string, string]`, so it composes with chains, decorators, and orchestration patterns. The LLM agent parameter can be any agent that accepts a string prompt, including agents built with `pkg/output` for structured responses.
+
+```go
+ragAgent := rag.NewPipeline(embedder, vectorStore, llmAgent, 5)
+pipeline := agent.Chain2(inputProcessor, ragAgent)
+reliable := agent.WithRetry(pipeline, agent.WithMaxAttempts(3))
+```
+
+### Thread Safety
+
+`InMemoryStore` uses `sync.RWMutex` — `Add` acquires a write lock, `Search` acquires a read lock. This allows concurrent searches while serializing writes. The pipeline itself is stateless beyond the store and delegates concurrency to its component agents.
+
+---
+
+## 18. Multi-Agent Conversations — `pkg/conv`
+
+### Purpose and Design Rationale
+
+The conv package enables multi-agent conversations where multiple participants exchange messages in a structured, turn-taking protocol. This is useful for debate-style reasoning, collaborative problem solving, and agent-to-agent negotiation. A `Moderator` orchestrates the conversation flow with configurable rounds, termination conditions, and turn order.
+
+### Key Interfaces and Types
+
+#### Envelope — Message Container
+
+```go
+// Envelope wraps a message with routing metadata.
+type Envelope struct {
+    From    string // sender participant name
+    To      string // recipient participant name ("" for broadcast)
+    Content string
+    Round   int
+}
+```
+
+#### Channel — Thread-Safe Message Queue
+
+`Channel` is a thread-safe FIFO queue for passing envelopes between participants:
+
+```go
+type Channel struct {
+    mu       sync.Mutex
+    messages []Envelope
+}
+
+func (c *Channel) Send(env Envelope)
+func (c *Channel) Receive() ([]Envelope, bool)
+func (c *Channel) Clear()
+```
+
+#### Participant — Conversation Member
+
+```go
+// Participant is an entity that can engage in multi-agent conversations.
+type Participant interface {
+    // Name returns the participant's unique identifier.
+    Name() string
+    // Respond generates a response given the conversation history.
+    Respond(ctx context.Context, history []Envelope) (Envelope, error)
+}
+
+// FuncParticipant adapts a function into a Participant.
+type FuncParticipant struct {
+    name string
+    fn   func(ctx context.Context, history []Envelope) (Envelope, error)
+}
+```
+
+#### Moderator — Turn-Taking Orchestrator
+
+The `Moderator` manages conversation flow:
+
+```go
+type Moderator struct {
+    participants []Participant
+    maxRounds    int
+    turnOrder    []string          // custom turn order (optional)
+    termination  func([]Envelope) bool // early termination condition
+}
+
+func NewModerator(participants []Participant, opts ...ModeratorOption) *Moderator
+func (m *Moderator) Run(ctx context.Context, topic string) ([]Envelope, error)
+```
+
+**Conversation flow:**
+
+```
+Topic ──> Round 1: Participant A responds
+                   Participant B responds
+          Round 2: Participant A responds
+                   Participant B responds
+          ...
+          termination condition met OR maxRounds reached
+          ──> return full conversation history
+```
+
+#### AsAgent — Moderator as Agent
+
+`AsAgent()` converts a `Moderator` into a standard `Agent[string, []Envelope]`, enabling conversations to be embedded in larger pipelines.
+
+```go
+func (m *Moderator) AsAgent() agent.Agent[string, []Envelope]
+```
+
+### Integration with Existing Packages
+
+Through `AsAgent()`, a multi-agent conversation becomes a regular pipeline node. Participants can internally use `pkg/llm` agents, `pkg/memory` stores, or `pkg/rag` pipelines, enabling rich conversational workflows.
+
+```go
+debater1 := conv.FuncParticipant("optimist", optimistFn)
+debater2 := conv.FuncParticipant("critic", criticFn)
+mod := conv.NewModerator([]conv.Participant{debater1, debater2},
+    conv.WithMaxRounds(5),
+    conv.WithTermination(consensusReached),
+)
+// Use as an agent in a pipeline
+debate := mod.AsAgent() // Agent[string, []Envelope]
+pipeline := agent.Chain2(topicGenerator, agent.Erase(debate))
+```
+
+### Thread Safety
+
+`Channel` uses `sync.Mutex` for safe concurrent send and receive operations. The `Moderator` itself drives conversation sequentially (one participant at a time per round), so it does not require additional synchronization. Participants are responsible for their own internal thread safety.
+
+---
+
+*Waggle v0.6.0 — Apache 2.0 License*

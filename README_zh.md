@@ -282,14 +282,106 @@ router := llm.NewRouter(
 result, _ := router.Chat(ctx, messages)
 ```
 
+### 对话记忆
+
+```go
+import "github.com/lucientong/waggle/pkg/memory"
+
+// 三种策略：
+buffer := memory.NewBufferStore()           // 全量保留
+window := memory.NewWindowStore(20)         // 滑动窗口，置顶 system message
+summary := memory.NewSummaryStore(30, fn)   // LLM 摘要压缩
+
+// 挂载到任意 LLM Agent：
+chatbot := llm.NewLLMAgent("chatbot", provider, promptFn,
+    llm.WithMemory(memory.NewWindowStore(20)),
+)
+```
+
+### 结构化输出
+
+```go
+import "github.com/lucientong/waggle/pkg/output"
+
+type Review struct {
+    Score  int      `json:"score" jsonschema:"description=质量评分 1-10"`
+    Issues []string `json:"issues"`
+}
+
+reviewer := output.NewStructuredAgent[string, Review](
+    "reviewer", provider,
+    func(code string) string { return "审查:\n" + code },
+    output.WithMaxRetries(2),
+)
+
+review, _ := reviewer.Run(ctx, code) // 返回 Review 类型，不是 string
+```
+
+### 提示词模板
+
+```go
+import "github.com/lucientong/waggle/pkg/prompt"
+
+tmpl := prompt.New("分析 {{language}} 代码:\n{{code}}")
+rendered := tmpl.WithVar("language", "Go").WithVar("code", src).MustRender()
+
+fewShot := prompt.NewFewShot("判断情感倾向。").
+    AddExample("我很喜欢", "正面").
+    BuildWithInput("还不错")
+```
+
+### RAG 管道
+
+```go
+import "github.com/lucientong/waggle/pkg/rag"
+
+store := rag.NewInMemoryStore()
+rag.Ingest(ctx, text, "doc-1", embedder, store, splitter)
+
+pipeline := rag.NewPipeline("kb", embedder, store, provider, rag.WithTopK(5))
+answer, _ := pipeline.Run(ctx, "如何配置路由器？")
+```
+
+### 多 Agent 对话
+
+```go
+import "github.com/lucientong/waggle/pkg/conv"
+
+mod := conv.NewModerator("review",
+    conv.WithMaxRounds(5),
+    conv.WithTermination(consensusCheck),
+)
+mod.AddParticipant(analyst)
+mod.AddParticipant(reviewer)
+
+agent := conv.AsAgent(mod) // Agent[string, []Envelope]
+```
+
+### 可观测流水线
+
+```go
+import "github.com/lucientong/waggle/pkg/stream"
+
+collector := &stream.Collector{}
+pipeline := stream.ObservableChain2(fetchAgent, reviewAgent, collector)
+result, _ := pipeline.Run(ctx, input)
+// collector.Steps 包含所有中间步骤
+```
+
 ## 项目结构
 
 ```
 waggle/
 ├── pkg/
-│   ├── agent/      # Agent 接口、FuncAgent、Chain、装饰器（Retry/Timeout/Cache）
+│   ├── agent/      # Agent 接口、FuncAgent、Chain、装饰器
 │   ├── waggle/     # 核心编排器、DAG、执行器、编排模式
-│   ├── llm/        # LLM Provider（OpenAI、Anthropic、Ollama）+ LLM/Tool Agent
+│   ├── llm/        # LLM Provider + LLM/Tool Agent + 记忆集成
+│   ├── memory/     # 对话记忆（Buffer、Window、Summary）
+│   ├── output/     # 结构化输出解析 + JSON Schema 生成
+│   ├── prompt/     # 提示词模板 + few-shot 构建器
+│   ├── rag/        # RAG 管道（Embedder、VectorStore、Splitter）
+│   ├── conv/       # 多 Agent 对话协议
+│   ├── stream/     # 可观测流水线 + 步骤流式输出
 │   ├── observe/    # 事件、追踪、指标、结构化日志
 │   └── web/        # 内嵌 Web 可视化面板
 ├── cmd/waggle/     # CLI：run / serve / validate / dot
@@ -316,6 +408,8 @@ waggle/
 - [x] **Phase 6** — 内嵌 Web DAG 可视化面板
 - [x] **Phase 7** — CLI（`waggle run / serve / validate / dot`）
 - [x] **Phase 8** — 实战示例（代码审查、调研助手、智能客服）
+- [x] **Phase 9** — 对话记忆、结构化输出、提示词模板
+- [x] **Phase 10** — RAG 管道、多 Agent 对话、可观测流水线
 
 ## 环境要求
 
