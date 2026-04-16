@@ -70,15 +70,40 @@ type Tracer struct {
 	mu       sync.Mutex
 	spans    []*Span
 	exporter SpanExporter
+	sampler  Sampler
+	sampled  bool // cached sampling decision for this trace
+}
+
+// TracerOption configures a Tracer.
+type TracerOption func(*Tracer)
+
+// WithSampler sets a sampling strategy for the tracer.
+// If the sampler decides not to sample this trace, no spans are recorded or exported.
+// Default: AlwaysSample.
+func WithSampler(s Sampler) TracerOption {
+	return func(t *Tracer) {
+		t.sampler = s
+	}
 }
 
 // NewTracer creates a new Tracer for the given trace ID.
 // If exporter is non-nil, completed spans are forwarded to it.
-func NewTracer(traceID string, exporter SpanExporter) *Tracer {
-	return &Tracer{
+func NewTracer(traceID string, exporter SpanExporter, opts ...TracerOption) *Tracer {
+	t := &Tracer{
 		traceID:  traceID,
 		exporter: exporter,
+		sampler:  AlwaysSample{},
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
+	t.sampled = t.sampler.ShouldSample(traceID)
+	return t
+}
+
+// IsSampled returns whether this trace is being recorded.
+func (t *Tracer) IsSampled() bool {
+	return t.sampled
 }
 
 // tracerKey is the context key for storing the active Tracer.
@@ -99,7 +124,12 @@ func TracerFromContext(ctx context.Context) *Tracer {
 // StartSpan begins a new span for the named operation.
 // If parentSpanID is empty, the span is a root span for this trace.
 // Returns a spanHandle that must be ended via End or EndWithError.
+// If the trace is not sampled, returns a no-op handle that does nothing.
 func (t *Tracer) StartSpan(name, parentSpanID string, attrs map[string]any) *spanHandle {
+	if !t.sampled {
+		return &spanHandle{span: &Span{SpanID: "unsampled"}, tracer: t, noop: true}
+	}
+
 	span := &Span{
 		TraceID:      t.traceID,
 		SpanID:       generateID(),
@@ -133,6 +163,7 @@ func (t *Tracer) Spans() []Span {
 type spanHandle struct {
 	span   *Span
 	tracer *Tracer
+	noop   bool
 }
 
 // SpanID returns the ID of this span.
@@ -150,6 +181,9 @@ func (h *spanHandle) SetAttribute(key string, value any) {
 
 // End marks the span as successfully completed.
 func (h *spanHandle) End() {
+	if h.noop {
+		return
+	}
 	h.span.EndTime = time.Now()
 	h.span.Status = SpanStatusOK
 	if h.tracer.exporter != nil {
@@ -159,6 +193,9 @@ func (h *spanHandle) End() {
 
 // EndWithError marks the span as failed with the given error.
 func (h *spanHandle) EndWithError(err error) {
+	if h.noop {
+		return
+	}
 	h.span.EndTime = time.Now()
 	h.span.Status = SpanStatusError
 	if err != nil {
