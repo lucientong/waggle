@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/lucientong/waggle
-  tag: "0.7.0"
+  tag: "0.3.0"
   pullPolicy: IfNotPresent
 
 service:

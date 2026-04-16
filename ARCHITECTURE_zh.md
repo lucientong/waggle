@@ -1371,4 +1371,4 @@ pipeline := agent.Chain2(topicGenerator, agent.Erase(debate))
 
 ---
 
-*Waggle v0.6.0 — Apache 2.0 License*
+*Waggle v0.3.0 — Apache 2.0 License*
