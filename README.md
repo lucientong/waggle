@@ -368,6 +368,115 @@ result, _ := pipeline.Run(ctx, input)
 // collector.Steps has all intermediate steps
 ```
 
+### Pipeline (ChainN) — Arbitrary Length Chains
+
+When you need more than 5 stages, use `Pipeline` with `Erase()`:
+
+```go
+result, err := agent.NewPipeline("my-pipeline").
+    Add(agent.Erase(fetchAgent)).
+    Add(agent.Erase(parseAgent)).
+    Add(agent.Erase(reviewAgent)).
+    Add(agent.Erase(summarizeAgent)).
+    Add(agent.Erase(formatAgent)).
+    Add(agent.Erase(postAgent)).  // 6+ stages — no limit
+    Run(ctx, input)
+```
+
+### PipelineContext — Share Data Across Stages
+
+Pass data between non-adjacent stages without bloating intermediate types:
+
+```go
+pctx := agent.NewPipelineContext()
+ctx := agent.WithPipelineCtx(ctx, pctx)
+
+// In stage 1: store data
+pctx.Set("pr_ref", prRef)
+
+// In stage 6: retrieve it
+ref, ok := agent.PipelineGet[PRRef](agent.PipelineCtxFrom(ctx), "pr_ref")
+```
+
+### ParallelThen — Parallel + Merge in One Step
+
+```go
+reviewPipeline := waggle.ParallelThen("reviewers",
+    func(pr waggle.ParallelResults[[]Review]) (AggregatedReview, error) {
+        return mergeReviews(pr.Results), nil
+    },
+    securityAgent, styleAgent, logicAgent, perfAgent,
+)
+```
+
+### Guardrails — Input/Output Validation
+
+```go
+import "github.com/lucientong/waggle/pkg/guardrail"
+
+// String agents:
+safe := guardrail.WithOutputGuard(chatAgent, guardrail.PIIEmail, guardrail.MaxLength(10000))
+
+// Any type — use Extract variants:
+safe := guardrail.WithOutputExtractGuard(reviewAgent,
+    func(r *AggregatedReview) string { return r.Summary },
+    guardrail.MaxLength(5000), guardrail.PIIEmail,
+)
+```
+
+### Prometheus Metrics
+
+```go
+metrics := observe.NewMetrics()
+http.Handle("/metrics", observe.PrometheusHandler(metrics))
+```
+
+## Best Practices
+
+### When to Use Agents vs Plain Functions
+
+Not every step needs to be an Agent. Use an Agent when:
+- The step involves I/O (LLM call, API request, database query)
+- You want observability (metrics, tracing, events)
+- You need decorators (retry, timeout, cache)
+- The step is reusable across pipelines
+
+Use a plain function when:
+- The step is a trivial transformation (field access, type conversion)
+- There's no error possibility
+- Wrapping adds ceremony without benefit
+
+```go
+// BAD — unnecessary Agent for trivial field access:
+splitAgent := agent.Func[PRData, []FileChange]("split", func(_ context.Context, pr PRData) ([]FileChange, error) {
+    return pr.Files, nil
+})
+
+// GOOD — just access the field directly in your orchestrator:
+files := prData.Files
+```
+
+### Agent-in-Agent Pattern
+
+It's perfectly valid to call agents inside other agents:
+
+```go
+reviewAgent := agent.Func[[]FileChange, []Review]("reviewer", func(ctx context.Context, files []FileChange) ([]Review, error) {
+    var reviews []Review
+    for _, file := range files {
+        // Inner agent: one LLM call per file
+        fileReview, err := structuredAgent.Run(ctx, file.Patch)
+        if err != nil {
+            continue // or handle
+        }
+        reviews = append(reviews, fileReview...)
+    }
+    return reviews, nil
+})
+```
+
+Note: Inner agents' metrics/traces are recorded independently. Use PipelineContext if you need to correlate them.
+
 ## Project Structure
 
 ```

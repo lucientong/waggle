@@ -385,3 +385,70 @@ func TestPatterns_Composable(t *testing.T) {
 		t.Errorf("Run() = %q, want %q", result, "[x1,x2]")
 	}
 }
+
+// ---- ParallelThen -----------------------------------------------------------
+
+func TestParallelThen_MergeResults(t *testing.T) {
+	a1 := agent.Func[int, int]("double", func(_ context.Context, n int) (int, error) { return n * 2, nil })
+	a2 := agent.Func[int, int]("triple", func(_ context.Context, n int) (int, error) { return n * 3, nil })
+
+	// Merge by summing all results.
+	pt := waggle.ParallelThen("sum", func(pr waggle.ParallelResults[int]) (int, error) {
+		sum := 0
+		for _, r := range pr.Results {
+			sum += r
+		}
+		return sum, nil
+	}, a1, a2)
+
+	result, err := pt.Run(context.Background(), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 5*2 + 5*3 = 25
+	if result != 25 {
+		t.Errorf("expected 25, got %d", result)
+	}
+}
+
+func TestParallelThen_MergeError(t *testing.T) {
+	a1 := agent.Func[string, string]("a1", func(_ context.Context, s string) (string, error) { return s, nil })
+
+	pt := waggle.ParallelThen("fail-merge", func(_ waggle.ParallelResults[string]) (string, error) {
+		return "", errors.New("merge failed")
+	}, a1)
+
+	_, err := pt.Run(context.Background(), "x")
+	if err == nil {
+		t.Fatal("expected merge error")
+	}
+	if !strings.Contains(err.Error(), "merge") {
+		t.Errorf("error should mention merge: %v", err)
+	}
+}
+
+func TestParallelThen_Name(t *testing.T) {
+	a := agent.Func[int, int]("a", func(_ context.Context, n int) (int, error) { return n, nil })
+	pt := waggle.ParallelThen("my-pt", func(pr waggle.ParallelResults[int]) (int, error) { return 0, nil }, a)
+	if pt.Name() != "my-pt" {
+		t.Errorf("expected my-pt, got %s", pt.Name())
+	}
+}
+
+func TestParallelThen_DifferentOutputType(t *testing.T) {
+	a1 := agent.Func[string, int]("len1", func(_ context.Context, s string) (int, error) { return len(s), nil })
+	a2 := agent.Func[string, int]("len2", func(_ context.Context, s string) (int, error) { return len(s) * 2, nil })
+
+	// Merge int results into a summary string.
+	pt := waggle.ParallelThen("summarize", func(pr waggle.ParallelResults[int]) (string, error) {
+		return fmt.Sprintf("lengths: %d, %d", pr.Results[0], pr.Results[1]), nil
+	}, a1, a2)
+
+	result, err := pt.Run(context.Background(), "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "lengths: 5, 10" {
+		t.Errorf("unexpected: %q", result)
+	}
+}

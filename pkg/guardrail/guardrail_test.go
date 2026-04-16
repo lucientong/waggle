@@ -263,3 +263,109 @@ func TestGuardedAgent_Name(t *testing.T) {
 		t.Errorf("expected myagent, got %s", og.Name())
 	}
 }
+
+// --- Generic Extract Guard Tests ---
+
+type testReview struct {
+	Summary string
+	Score   int
+}
+
+func TestWithInputExtractGuard(t *testing.T) {
+	inner := agent.Func[testReview, bool]("post", func(_ context.Context, r testReview) (bool, error) {
+		return true, nil
+	})
+
+	guarded := WithInputExtractGuard(inner,
+		func(r testReview) string { return r.Summary },
+		MaxLength(10),
+	)
+
+	// Valid.
+	ok, err := guarded.Run(context.Background(), testReview{Summary: "short", Score: 8})
+	if err != nil || !ok {
+		t.Errorf("should pass: err=%v, ok=%v", err, ok)
+	}
+
+	// Invalid.
+	_, err = guarded.Run(context.Background(), testReview{Summary: "this is way too long", Score: 5})
+	if err == nil {
+		t.Fatal("expected guard violation")
+	}
+	var gve *GuardViolationError
+	if !errors.As(err, &gve) {
+		t.Fatalf("expected GuardViolationError, got %T", err)
+	}
+	if gve.Phase != "input" {
+		t.Errorf("expected input phase, got %s", gve.Phase)
+	}
+}
+
+func TestWithOutputExtractGuard(t *testing.T) {
+	inner := agent.Func[string, testReview]("reviewer", func(_ context.Context, s string) (testReview, error) {
+		return testReview{Summary: s + " - reviewed with a very long summary text", Score: 7}, nil
+	})
+
+	guarded := WithOutputExtractGuard(inner,
+		func(r testReview) string { return r.Summary },
+		MaxLength(20),
+	)
+
+	// Should fail because output summary exceeds 20 chars.
+	_, err := guarded.Run(context.Background(), "code")
+	if err == nil {
+		t.Fatal("expected guard violation")
+	}
+	var gve *GuardViolationError
+	if !errors.As(err, &gve) {
+		t.Fatalf("expected GuardViolationError, got %T", err)
+	}
+	if gve.Phase != "output" {
+		t.Errorf("expected output phase, got %s", gve.Phase)
+	}
+}
+
+func TestWithOutputExtractGuard_Pass(t *testing.T) {
+	inner := agent.Func[string, testReview]("reviewer", func(_ context.Context, s string) (testReview, error) {
+		return testReview{Summary: "ok", Score: 9}, nil
+	})
+
+	guarded := WithOutputExtractGuard(inner,
+		func(r testReview) string { return r.Summary },
+		MaxLength(100),
+	)
+
+	result, err := guarded.Run(context.Background(), "code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Score != 9 {
+		t.Errorf("expected score 9, got %d", result.Score)
+	}
+}
+
+func TestWithInputExtractGuard_InnerError(t *testing.T) {
+	inner := agent.Func[testReview, bool]("fail", func(_ context.Context, _ testReview) (bool, error) {
+		return false, errors.New("inner error")
+	})
+
+	guarded := WithInputExtractGuard(inner,
+		func(r testReview) string { return r.Summary },
+		MaxLength(100),
+	)
+
+	_, err := guarded.Run(context.Background(), testReview{Summary: "ok"})
+	if err == nil || err.Error() != "inner error" {
+		t.Errorf("expected inner error, got: %v", err)
+	}
+}
+
+func TestExtractGuard_Name(t *testing.T) {
+	inner := agent.Func[testReview, bool]("myagent", func(_ context.Context, _ testReview) (bool, error) {
+		return true, nil
+	})
+	ig := WithInputExtractGuard(inner, func(r testReview) string { return r.Summary }, MaxLength(10))
+	if ig.Name() != "myagent" {
+		t.Errorf("expected myagent, got %s", ig.Name())
+	}
+}
