@@ -246,3 +246,82 @@ func (g *outputGuardAgent[I]) Run(ctx context.Context, input I) (string, error) 
 	}
 	return output, nil
 }
+
+// WithInputExtractGuard wraps any Agent[I, O] with input validation by extracting
+// a string from I via extractFn. This allows guardrails on non-string input types.
+//
+// Example:
+//
+//	guarded := guardrail.WithInputExtractGuard(postAgent,
+//	    func(review *AggregatedReview) string { return review.Summary },
+//	    guardrail.MaxLength(10000),
+//	    guardrail.PIIEmail,
+//	)
+func WithInputExtractGuard[I, O any](a agent.Agent[I, O], extractFn func(I) string, validators ...Validator) agent.Agent[I, O] {
+	return &inputExtractGuardAgent[I, O]{inner: a, extractFn: extractFn, validators: validators}
+}
+
+type inputExtractGuardAgent[I, O any] struct {
+	inner      agent.Agent[I, O]
+	extractFn  func(I) string
+	validators []Validator
+}
+
+func (g *inputExtractGuardAgent[I, O]) Name() string { return g.inner.Name() }
+
+func (g *inputExtractGuardAgent[I, O]) Run(ctx context.Context, input I) (O, error) {
+	var zero O
+	extracted := g.extractFn(input)
+	for _, v := range g.validators {
+		if err := v.Validate(extracted); err != nil {
+			return zero, &GuardViolationError{
+				AgentName:     g.inner.Name(),
+				ValidatorName: v.Name(),
+				Phase:         "input",
+				Err:           err,
+			}
+		}
+	}
+	return g.inner.Run(ctx, input)
+}
+
+// WithOutputExtractGuard wraps any Agent[I, O] with output validation by extracting
+// a string from O via extractFn. This allows guardrails on non-string output types.
+//
+// Example:
+//
+//	guarded := guardrail.WithOutputExtractGuard(reviewAgent,
+//	    func(review *AggregatedReview) string { return review.Summary },
+//	    guardrail.MaxLength(5000),
+//	)
+func WithOutputExtractGuard[I, O any](a agent.Agent[I, O], extractFn func(O) string, validators ...Validator) agent.Agent[I, O] {
+	return &outputExtractGuardAgent[I, O]{inner: a, extractFn: extractFn, validators: validators}
+}
+
+type outputExtractGuardAgent[I, O any] struct {
+	inner      agent.Agent[I, O]
+	extractFn  func(O) string
+	validators []Validator
+}
+
+func (g *outputExtractGuardAgent[I, O]) Name() string { return g.inner.Name() }
+
+func (g *outputExtractGuardAgent[I, O]) Run(ctx context.Context, input I) (O, error) {
+	var zero O
+	output, err := g.inner.Run(ctx, input)
+	if err != nil {
+		return zero, err
+	}
+	extracted := g.extractFn(output)
+	for _, v := range g.validators {
+		if err := v.Validate(extracted); err != nil {
+			return zero, &GuardViolationError{
+				AgentName:     g.inner.Name(),
+				ValidatorName: v.Name(),
+				Phase:         "output",
+				Err:           err,
+			}
+		}
+	}
+	return output, nil
+}

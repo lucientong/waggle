@@ -18,6 +18,60 @@ type ParallelResults[O any] struct {
 	Errors  []error
 }
 
+// MergeFunc combines parallel results into a single output.
+type MergeFunc[O, R any] func(results ParallelResults[O]) (R, error)
+
+// parallelThenAgent combines parallel execution with a merge step.
+type parallelThenAgent[I, O, R any] struct {
+	name    string
+	agents  []agent.Agent[I, O]
+	mergeFn MergeFunc[O, R]
+}
+
+func (p *parallelThenAgent[I, O, R]) Name() string { return p.name }
+
+func (p *parallelThenAgent[I, O, R]) Run(ctx context.Context, input I) (R, error) {
+	var zero R
+	n := len(p.agents)
+	results := make([]O, n)
+	errs := make([]error, n)
+
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i, a := range p.agents {
+		i, a := i, a
+		go func() {
+			defer wg.Done()
+			results[i], errs[i] = a.Run(ctx, input)
+		}()
+	}
+	wg.Wait()
+
+	pr := ParallelResults[O]{Results: results, Errors: errs}
+	merged, err := p.mergeFn(pr)
+	if err != nil {
+		return zero, fmt.Errorf("parallel-then %q merge: %w", p.name, err)
+	}
+	return merged, nil
+}
+
+// ParallelThen creates an agent that fans out to all agents concurrently,
+// then applies a merge function to combine the results into a single value.
+//
+// This is a convenience for the common pattern: Parallel -> merge step.
+//
+// Example:
+//
+//	reviewPipeline := waggle.ParallelThen("reviewers",
+//	    func(pr waggle.ParallelResults[[]Review]) (AggregatedReview, error) {
+//	        return mergeReviews(pr.Results), nil
+//	    },
+//	    securityAgent, styleAgent, logicAgent, perfAgent,
+//	)
+func ParallelThen[I, O, R any](name string, mergeFn MergeFunc[O, R], agents ...agent.Agent[I, O]) agent.Agent[I, R] {
+	return &parallelThenAgent[I, O, R]{name: name, agents: agents, mergeFn: mergeFn}
+}
+
 // parallelAgent runs multiple agents concurrently with the same input and
 // collects all results. It implements Agent[I, ParallelResults[O]].
 type parallelAgent[I, O any] struct {

@@ -368,6 +368,114 @@ result, _ := pipeline.Run(ctx, input)
 // collector.Steps 包含所有中间步骤
 ```
 
+### Pipeline (ChainN) — 任意长度链
+
+需要超过 5 个阶段时，使用 `Pipeline` + `Erase()`：
+
+```go
+result, err := agent.NewPipeline("my-pipeline").
+    Add(agent.Erase(fetchAgent)).
+    Add(agent.Erase(parseAgent)).
+    Add(agent.Erase(reviewAgent)).
+    Add(agent.Erase(summarizeAgent)).
+    Add(agent.Erase(formatAgent)).
+    Add(agent.Erase(postAgent)).  // 6+ 阶段，无上限
+    Run(ctx, input)
+```
+
+### PipelineContext — 跨阶段共享数据
+
+在非相邻阶段间传递数据，无需污染中间类型：
+
+```go
+pctx := agent.NewPipelineContext()
+ctx := agent.WithPipelineCtx(ctx, pctx)
+
+// 在第 1 阶段：存储数据
+pctx.Set("pr_ref", prRef)
+
+// 在第 6 阶段：读取
+ref, ok := agent.PipelineGet[PRRef](agent.PipelineCtxFrom(ctx), "pr_ref")
+```
+
+### ParallelThen — 并行 + 合并一步完成
+
+```go
+reviewPipeline := waggle.ParallelThen("reviewers",
+    func(pr waggle.ParallelResults[[]Review]) (AggregatedReview, error) {
+        return mergeReviews(pr.Results), nil
+    },
+    securityAgent, styleAgent, logicAgent, perfAgent,
+)
+```
+
+### Guardrails — 输入/输出校验
+
+```go
+import "github.com/lucientong/waggle/pkg/guardrail"
+
+// 字符串 Agent：
+safe := guardrail.WithOutputGuard(chatAgent, guardrail.PIIEmail, guardrail.MaxLength(10000))
+
+// 任意类型 — 使用 Extract 变体：
+safe := guardrail.WithOutputExtractGuard(reviewAgent,
+    func(r *AggregatedReview) string { return r.Summary },
+    guardrail.MaxLength(5000), guardrail.PIIEmail,
+)
+```
+
+### Prometheus 指标
+
+```go
+metrics := observe.NewMetrics()
+http.Handle("/metrics", observe.PrometheusHandler(metrics))
+```
+
+## 最佳实践
+
+### 何时使用 Agent vs 普通函数
+
+不是每一步都需要 Agent。使用 Agent 当：
+- 涉及 I/O（LLM 调用、API 请求、数据库查询）
+- 需要可观测性（指标、追踪、事件）
+- 需要装饰器（重试、超时、缓存）
+- 该步骤可跨流水线复用
+
+使用普通函数当：
+- 是简单转换（字段访问、类型转换）
+- 不会出错
+- 包装只增加代码量而没有收益
+
+```go
+// 不推荐 — 简单字段访问不需要 Agent：
+splitAgent := agent.Func[PRData, []FileChange]("split", func(_ context.Context, pr PRData) ([]FileChange, error) {
+    return pr.Files, nil
+})
+
+// 推荐 — 直接在编排器里访问字段：
+files := prData.Files
+```
+
+### Agent 嵌套模式
+
+在 Agent 内部调用其他 Agent 是完全合法的：
+
+```go
+reviewAgent := agent.Func[[]FileChange, []Review]("reviewer", func(ctx context.Context, files []FileChange) ([]Review, error) {
+    var reviews []Review
+    for _, file := range files {
+        fileReview, err := structuredAgent.Run(ctx, file.Patch)
+        if err != nil {
+            continue
+        }
+        reviews = append(reviews, fileReview...)
+    }
+    return reviews, nil
+})
+```
+
+内部 Agent 的指标/追踪独立记录。如需关联，使用 PipelineContext。
+
 ## 项目结构
 
 ```
